@@ -182,7 +182,7 @@ Gap Detection の説明を追加。
 | Step 3: CLI | 🟢 |
 | Step 4: テスト | 🟢 |
 | Step 5: SKILL.md 統合 | 🟢 |
-| Step 6: CLAUDE.md 更新 | ⚪ |
+| Step 6: CLAUDE.md 更新 | 🟢 |
 | Commit | ⚪ |
 
 **Legend:** ⚪ Pending · 🟡 In Progress · 🟢 Done
