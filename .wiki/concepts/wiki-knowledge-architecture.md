@@ -3,12 +3,14 @@ title: Wiki ナレッジ構築アーキテクチャ
 type: wiki
 source_refs:
   - "raw/articles/20260405-wiki-knowledge-architecture.md"
+  - "raw/articles/20260405-karpathy-llm-wiki-pattern.md"
 created: 2026-04-05
 updated: 2026-04-05
 category: concepts
-tags: [wiki, architecture, ingest, compile, index, knowledge-base]
+tags: [wiki, architecture, ingest, compile, query, lint, index, knowledge-base]
 related:
   - "concepts/llm-wiki-knowledge-base.md"
+  - "concepts/llm-wiki-tooling.md"
 ---
 
 # Wiki ナレッジ構築アーキテクチャ
@@ -54,6 +56,33 @@ related:
 | `.wiki/index.md` | 全記事カタログ |
 | `.wiki/log.md` | 変更履歴 |
 
+## Karpathy オリジナルの Operations 定義
+
+Karpathy のパターンドキュメントでは、3つのオペレーションが定義されている：
+
+### Ingest
+
+ソースを raw コレクションに追加し、LLM に処理させる。LLM はソースを読み、要約ページを作成し、インデックスを更新し、関連するエンティティ・コンセプトページを横断的に更新する。1つのソースが 10-15 ページに影響しうる。
+
+### Query
+
+Wiki に対して質問する。LLM は関連ページを検索・読み込み、引用付きの合成回答を生成する。重要な洞察：**良い回答は Wiki に新ページとして還元できる** — 探索も知識ベースに複利的に蓄積される。
+
+### Lint
+
+定期的なヘルスチェック。検出対象：
+- ページ間の矛盾
+- 新しいソースで上書きされた古い主張
+- インバウンドリンクのない孤立ページ
+- 言及されているが専用ページがないコンセプト
+- 欠けている相互参照
+- Web 検索で埋められるデータギャップ
+
+## インデックスとログの役割
+
+- **index.md**（コンテンツ指向）: 全ページカタログ。Query 時に LLM がまず index を読んで関連ページを特定し、詳細に入る。~100 ソース・数百ページ規模では embedding ベース RAG なしで十分機能する。
+- **log.md**（時系列）: append-only の操作記録。`## [日付] 操作 | タイトル` の形式で unix ツールでパース可能。
+
 ## 設計思想
 
 [[llm-wiki-knowledge-base]] の Karpathy コンセプトに基づき、**人間はキュレーションと質問に集中し、構造化は LLM に委譲する** というアプローチを取る。Claude Skill として実装されているため、任意のプロジェクトに導入可能。
@@ -61,3 +90,4 @@ related:
 ## 出典
 
 - [Wiki ナレッジ構築アーキテクチャ — 3層構造の解説](../raw/articles/20260405-wiki-knowledge-architecture.md)
+- [LLM Wiki — Karpathy's Original Pattern Document](../raw/articles/20260405-karpathy-llm-wiki-pattern.md)

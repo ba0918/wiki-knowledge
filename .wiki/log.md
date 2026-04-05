@@ -7,3 +7,8 @@ Append-only 操作ログ。`grep "^## \[" log.md | tail -10` で直近10件を�
 ## [2026-04-05] compile | LLM Wiki Knowledge Base (105 words, 1 source)
 ## [2026-04-05] ingest | wiki-knowledge-architecture (article)
 ## [2026-04-05] compile | Wiki ナレッジ構築アーキテクチャ (180 words, 1 source)
+## [2026-04-05] ingest | karpathy-llm-wiki-pattern (gist)
+## [2026-04-05] compile | LLM Wiki Knowledge Base 強化 (2 sources)
+## [2026-04-05] compile | Wiki ナレッジ構築アーキテクチャ 強化 (2 sources)
+## [2026-04-05] compile | LLM Wiki ユースケース (new, 1 source)
+## [2026-04-05] compile | LLM Wiki ツーリング (new, 1 source)
