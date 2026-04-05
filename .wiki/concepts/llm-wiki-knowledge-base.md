@@ -7,7 +7,8 @@ created: 2026-04-05
 updated: 2026-04-05
 category: concepts
 tags: [llm, wiki, knowledge-base, karpathy, claude-skill]
-related: []
+related:
+  - "concepts/wiki-knowledge-architecture.md"
 ---
 
 # LLM Wiki Knowledge Base

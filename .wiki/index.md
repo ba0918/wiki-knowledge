@@ -5,6 +5,7 @@
 ## concepts
 
 - [[llm-wiki-knowledge-base]] — Karpathy 提唱の LLM Wiki コンセプトを Claude Skill として実装する知識ベース構築の仕組み
+- [[wiki-knowledge-architecture]] — Ingest → Compile → Index の3層アーキテクチャ解説
 
 ## tools
 
