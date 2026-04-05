@@ -10,11 +10,12 @@ tags: [querylog, jsonl, gap-detection, trust-score, wiki-query, phase2]
 related:
   - "concepts/wiki-knowledge-architecture.md"
   - "concepts/llm-wiki-knowledge-base.md"
+  - "concepts/trust-score.md"
 ---
 
 # QueryLog — Wiki Query のメタデータログ基盤
 
-> wiki-query 実行時にクエリのメタデータを JSONL で蓄積する仕組み。後続の Trust Score・Gap Detection・Auto Ingest 提案の基盤データレイヤーとして機能する。
+> wiki-query 実行時にクエリのメタデータを JSONL で蓄積する仕組み。後続の [[trust-score]]・Gap Detection・Auto Ingest 提案の基盤データレイヤーとして機能する。
 
 ## 目的と背景
 
@@ -95,10 +96,10 @@ python3 querylog-stats.py --wiki-root .wiki
 QueryLog は [[wiki-knowledge-architecture]] の Output 層に属し、Phase 2+ 全機能の基盤:
 
 ```
-QueryLog (P0) → Trust Score (P1) → Gap Detection + Auto Ingest (P2)
+QueryLog (P0) → [[trust-score]] (P1) → Gap Detection + Auto Ingest (P2)
 ```
 
-- **Trust Score**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
+- **[[trust-score]]**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
 - **Gap Detection**: gap_topics の頻度集計で知識ギャップを構造化
 - **Auto Ingest 提案**: 高頻度ギャップに対するソース候補の自動生成
 

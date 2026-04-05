@@ -13,6 +13,7 @@ related:
   - "concepts/llm-wiki-use-cases.md"
   - "concepts/llm-wiki-tooling.md"
   - "concepts/querylog.md"
+  - "concepts/trust-score.md"
 ---
 
 # LLM Wiki Knowledge Base

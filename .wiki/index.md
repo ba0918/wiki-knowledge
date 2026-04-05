@@ -8,6 +8,7 @@
 - [[wiki-knowledge-architecture]] — Ingest → Compile → Index の3層アーキテクチャと Operations 定義
 - [[llm-wiki-use-cases]] — パーソナル・リサーチ・読書・ビジネス等のユースケース集
 - [[querylog]] — wiki-query のメタデータを JSONL で蓄積、Gap Detection・Trust Score の基盤
+- [[trust-score]] — 記事ごとの信頼度を4要素（ソース数・鮮度・引用頻度・backlink数）で定量評価
 
 ## tools
 
