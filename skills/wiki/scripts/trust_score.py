@@ -32,6 +32,7 @@ def _import_from_file(module_name: str, file_name: str):
     _here = Path(__file__).resolve().parent
     spec = _ilu.spec_from_file_location(module_name, _here / file_name)
     mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules[module_name] = mod  # register before exec for Python 3.10 compat
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
