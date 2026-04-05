@@ -1,0 +1,14 @@
+{
+  "name": "wiki-knowladge",
+  "owner": {
+    "name": "mizumi"
+  },
+  "plugins": [
+    {
+      "name": "wiki",
+      "source": "./",
+      "description": "LLM Wiki Knowledge Base — source documents to interlinked Markdown wiki with ingest, compile, query, lint pipelines",
+      "version": "0.1.0"
+    }
+  ]
+}
