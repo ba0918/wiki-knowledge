@@ -1,0 +1,15 @@
+{
+  "name": "wiki",
+  "version": "0.1.0",
+  "description": "LLM Wiki Knowledge Base — source documents to interlinked Markdown wiki with ingest, compile, query, lint pipelines",
+  "author": {
+    "name": "mizumi"
+  },
+  "license": "MIT",
+  "keywords": [
+    "wiki",
+    "knowledge-base",
+    "llm",
+    "markdown"
+  ]
+}
