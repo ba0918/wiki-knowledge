@@ -9,6 +9,8 @@ category: concepts
 tags: [llm, wiki, use-case, personal, research, business]
 related:
   - "concepts/llm-wiki-knowledge-base.md"
+  - "concepts/wiki-knowledge-architecture.md"
+  - "concepts/llm-wiki-tooling.md"
 ---
 
 # LLM Wiki ユースケース

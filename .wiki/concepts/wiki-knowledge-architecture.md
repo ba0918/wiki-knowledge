@@ -11,6 +11,7 @@ tags: [wiki, architecture, ingest, compile, query, lint, index, knowledge-base]
 related:
   - "concepts/llm-wiki-knowledge-base.md"
   - "concepts/llm-wiki-tooling.md"
+  - "concepts/llm-wiki-use-cases.md"
 ---
 
 # Wiki ナレッジ構築アーキテクチャ

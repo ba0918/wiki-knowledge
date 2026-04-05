@@ -10,6 +10,7 @@ tags: [obsidian, qmd, marp, dataview, search, tooling]
 related:
   - "concepts/llm-wiki-knowledge-base.md"
   - "concepts/wiki-knowledge-architecture.md"
+  - "concepts/llm-wiki-use-cases.md"
 ---
 
 # LLM Wiki ツーリング
