@@ -181,7 +181,7 @@ Gap Detection の説明を追加。
 | Step 2: フォーマッタ | 🟢 |
 | Step 3: CLI | 🟢 |
 | Step 4: テスト | 🟢 |
-| Step 5: SKILL.md 統合 | ⚪ |
+| Step 5: SKILL.md 統合 | 🟢 |
 | Step 6: CLAUDE.md 更新 | ⚪ |
 | Commit | ⚪ |
 
