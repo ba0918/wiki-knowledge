@@ -59,3 +59,25 @@ summary:
   info: 0
 ---
 ```
+
+## QueryLog エントリ（outputs/querylog.jsonl）
+
+各行が1つの JSON オブジェクト（JSONL 形式）。
+
+```jsonl
+{"id":"q_20260405T223000","timestamp":"2026-04-05T22:30:00+09:00","question":"Ingest と Compile の違いは？","sources_consulted":["concepts/llm-wiki-knowledge-base.md"],"sources_cited":["concepts/llm-wiki-knowledge-base.md"],"gap_noted":false,"gap_topics":[],"promoted":false,"promoted_to":null}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `id` | string | Yes | `q_{YYYYMMDDTHHMMSS}` 形式（タイムスタンプベース） |
+| `timestamp` | string | Yes | ISO 8601 タイムスタンプ |
+| `question` | string | Yes | ユーザの質問文（全文） |
+| `sources_consulted` | string[] | Yes | index スキャンで読み込んだ記事パス |
+| `sources_cited` | string[] | Yes | 回答テキストから `[[wikilink]]` を正規表現抽出して収集 |
+| `gap_noted` | boolean | Yes | 回答中に「Wiki にない情報」を指摘したか |
+| `gap_topics` | string[] | Yes | ギャップとして指摘したトピック（空配列可） |
+| `promoted` | boolean | Yes | 回答を concepts/ に昇格したか |
+| `promoted_to` | string\|null | Yes | 昇格先のパス（promoted=false なら null） |
+
+**注意:** `question` にはユーザの質問文がそのまま記録される。機密情報が含まれる可能性があるため、デフォルトでは git 管理対象外。

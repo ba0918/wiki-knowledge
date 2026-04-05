@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "querylog-entry",
+  "title": "QueryLog Entry",
+  "description": "Wiki query ログの 1 エントリ（JSONL の 1 行に対応）",
+  "type": "object",
+  "required": [
+    "id",
+    "timestamp",
+    "question",
+    "sources_consulted",
+    "sources_cited",
+    "gap_noted",
+    "gap_topics",
+    "promoted",
+    "promoted_to"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^q_\\d{8}T\\d{6}$",
+      "description": "q_{YYYYMMDDTHHMMSS} 形式のタイムスタンプベース ID"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 タイムスタンプ"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ユーザの質問文（全文）"
+    },
+    "sources_consulted": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "index スキャンで読み込んだ記事パス"
+    },
+    "sources_cited": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "回答テキストから [[wikilink]] を正規表現抽出して収集"
+    },
+    "gap_noted": {
+      "type": "boolean",
+      "description": "回答中に「Wiki にない情報」を指摘したか"
+    },
+    "gap_topics": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "ギャップとして指摘したトピック（空配列可）"
+    },
+    "promoted": {
+      "type": "boolean",
+      "description": "回答を concepts/ に昇格したか"
+    },
+    "promoted_to": {
+      "type": ["string", "null"],
+      "description": "昇格先のパス（promoted=false なら null）"
+    }
+  }
+}

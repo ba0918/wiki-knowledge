@@ -1,6 +1,6 @@
 # Project Status
 
-**Last Updated:** 2026-04-06 00:15:00
+**Last Updated:** 2026-04-05 22:33:38
 
 ---
 
@@ -8,23 +8,29 @@
 
 | Field | Value |
 |-------|-------|
-| **Cycle ID** | `20260405185738` |
-| **Feature** | LLM Wiki Knowledge Base — Claude Skill 実装 |
-| **Started** | 2026-04-05 18:57:38 |
-| **Phase** | 🟢 Phase 0-1 Complete + スキル登録完了 |
-| **Plan** | [docs/plans/20260405185738_llm-wiki-skill.md](./plans/20260405185738_llm-wiki-skill.md) |
+| **Cycle ID** | `20260405223338` |
+| **Feature** | QueryLog 蓄積機能（Phase 2a） |
+| **Started** | 2026-04-05 22:33:38 |
+| **Phase** | 🟢 Complete |
+| **Plan** | [docs/plans/20260405223338_querylog.md](./plans/20260405223338_querylog.md) |
+| **Previous** | [Phase 0-1 実装](./plans/20260405185738_llm-wiki-skill.md) 🟢 Complete |
 
 **Current Focus:**
-Phase 0-1 実装 + プラグイン化 + settings.json 登録まで完了。次セッションで新規セッション起動して E2E 検証。
+Phase 2+ ロードマップ着手。QueryLog → Trust Score → Gap Detection の順で実装。まず QueryLog 蓄積機能の計画を作成。
 
 ---
 
-## 📌 Next Session TODO
+## 📌 Phase 2+ ロードマップ
 
-1. ~~**スキル登録設定**~~ ✅ `/wiki` + サブコマンド（`/wiki-init` 等）として登録済み
-2. ~~**プラグインインストール**~~ ✅ `settings.json` に `wiki@wiki-knowladge` 登録済み（`extraKnownMarketplaces` + `enabledPlugins`）
-3. **E2E 検証**（新セッション必須）: 別プロジェクトで `/wiki-init` → `/wiki-ingest` → `/wiki-compile` → `/wiki-query` → `/wiki-lint` を通しで実行。プラグイン再読み込みが必要なため新セッションで行う
-4. **Phase 2+ ロードマップ着手**（任意）: QueryLog蓄積、Gap Detection、Trust Score 等
+| ID | 機能 | 優先度 | Status |
+|----|------|--------|--------|
+| 2a | QueryLog 蓄積 | **P0** | 🟢 Complete |
+| 3a | Trust Score | P1 | ⚪ Pending |
+| 2b+2c | Gap Detection + Auto Ingest 提案 | P2 | ⚪ Pending |
+| 3b | Lint 強化 | P3 | ⚪ Pending |
+| 4-5 | Multi-Resolution / Portal 等 | 保留 | — |
+
+詳細: [Phase 2+ 分解メモ](./ideas/20260405_phase2-roadmap-decomposition.md)
 
 ## 📝 Design Decisions（このセッションで決まったこと）
 
@@ -66,17 +72,21 @@ skills/wiki/
 │   ├── lint-procedure.md       (6つのLLM駆動チェック + 修復フロー)
 │   └── prompts.md              (各フェーズのプロンプトテンプレート)
 ├── scripts/
-│   └── lint-wiki.py            (自動lint: dead link/orphan/missing source — テスト済み)
+│   ├── lint-wiki.py            (自動lint: dead link/orphan/missing source — テスト済み)
+│   ├── querylog_stats.py       (QueryLog 集計 — 15テスト)
+│   ├── querylog-stats.py       (↑へのシンボリックリンク)
+│   └── test_querylog_stats.py  (querylog_stats テスト)
 └── assets/
     ├── wiki-article-template.md
     ├── index-template.md
     ├── log-template.md
     └── claude-md-template.md
 
-.wiki/                          (実データ — 記事1つ)
-├── concepts/llm-wiki-knowledge-base.md
-├── raw/articles/20260405-llm-wiki-knowledge-base.md
-├── schema/{page-template,categories}.json
+.wiki/                          (実データ — 記事4つ)
+├── .gitignore                  (querylog.jsonl を git 管理外に)
+├── concepts/*.md               (4記事)
+├── raw/articles/*.md           (ソース3件)
+├── schema/{page-template,categories,querylog-schema}.json
 ├── index.md
 └── log.md
 ```

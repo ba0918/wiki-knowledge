@@ -198,7 +198,7 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
 3. **回答合成**: 以下のルールで回答を組み立てる
    - 主張には必ず `[[slug]]` で出典を付ける
    - 記事間の一致点・矛盾点を明示する
-   - Wiki にカバーされていない領域を「ギャップ」として指摘する
+   - Wiki にカバーされていない領域を「ギャップ」として指摘し、**トピック名を明示する**（例: 「RAG アーキテクチャについては Wiki にまだ記事がない」→ gap_topic: `RAG architecture`）
    - 質問の性質に応じてフォーマットを選ぶ（事実→散文、比較→テーブル、手順→番号付きリスト）
 4. **保存を提案**: 回答後、Wiki 記事として保存するか確認する
 
@@ -224,6 +224,27 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
    ---
    ```
 2. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] query | {question summary}`
+
+### QueryLog 追記（保存判断の後に必ず実行）
+
+回答の保存・不保存の処理が終わった後、以下の手順で QueryLog エントリを追記する:
+
+1. **エントリを組み立てる**:
+   - `id`: `q_{YYYYMMDDTHHMMSS}` 形式（現在時刻から生成、read-before-write 不要）
+   - `timestamp`: ISO 8601 形式の現在時刻
+   - `question`: ユーザの元の質問文
+   - `sources_consulted`: ステップ 1-2 で読み込んだ全記事パス（`{wiki_root}` からの相対）
+   - `sources_cited`: 回答テキスト中の `[[wikilink]]` を正規表現 `\[\[([a-z0-9-]+)\]\]` で抽出し、`concepts/{slug}.md` に変換
+   - `gap_noted`: 回答中にギャップを指摘したなら `true`
+   - `gap_topics`: 指摘したギャップのトピック名リスト（指摘なしなら空配列）
+   - `promoted`: 保存を承認された場合 `true`
+   - `promoted_to`: promote した場合はそのパス、それ以外は `null`
+
+2. **JSON 1行として `{wiki_root}/outputs/querylog.jsonl` に追記する**（ファイルが存在しない場合は自動作成される）
+
+3. スキーマ参照: `.wiki/schema/querylog-schema.json`
+
+**⚠ 注意:** `querylog.jsonl` にはユーザの質問文がそのまま記録される。デフォルトで `.gitignore` 対象（`.wiki/.gitignore`）。
 
 ### 重要
 
