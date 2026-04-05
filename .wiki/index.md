@@ -7,6 +7,7 @@
 - [[llm-wiki-knowledge-base]] — LLM が永続的 Wiki を漸進構築する RAG 代替パターン（Karpathy 提唱）
 - [[wiki-knowledge-architecture]] — Ingest → Compile → Index の3層アーキテクチャと Operations 定義
 - [[llm-wiki-use-cases]] — パーソナル・リサーチ・読書・ビジネス等のユースケース集
+- [[querylog]] — wiki-query のメタデータを JSONL で蓄積、Gap Detection・Trust Score の基盤
 
 ## tools
 
