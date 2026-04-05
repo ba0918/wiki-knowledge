@@ -6,17 +6,7 @@
 
 ## 🎯 Current Session
 
-| Field | Value |
-|-------|-------|
-| **Cycle ID** | `20260406012002` |
-| **Feature** | Trust Score 実装（Phase 3a） |
-| **Started** | 2026-04-06 01:20:02 |
-| **Phase** | 🟢 Complete |
-| **Plan** | [docs/plans/20260406012002_trust-score.md](./plans/20260406012002_trust-score.md) |
-| **Previous** | [QueryLog 蓄積（Phase 2a）](./plans/20260405223338_querylog.md) 🟢 Complete |
-
-**Current Focus:**
-Trust Score（Phase 3a）の実装。Wiki記事の信頼度を4要素（ソース数・鮮度・引用頻度・backlink数）で定量評価する。
+_No active session_
 
 ---
 
