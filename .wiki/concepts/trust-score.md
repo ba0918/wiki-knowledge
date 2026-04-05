@@ -11,6 +11,7 @@ related:
   - "concepts/querylog.md"
   - "concepts/wiki-knowledge-architecture.md"
   - "concepts/llm-wiki-knowledge-base.md"
+  - "concepts/gap-detection.md"
 ---
 
 # Trust Score
@@ -81,7 +82,7 @@ python3 trust_score.py --wiki-root .wiki [--format table|json|report]
 
 ### lint 統合
 
-`lint-wiki.py` 自体は変更せず（構造チェック特化を維持）、SKILL.md の lint ワークフロー内でオーケストレーションとして統合する。単一責任原則を維持する設計である。
+`lint-wiki.py` 自体は変更せず（構造チェック特化を維持）、SKILL.md の lint ワークフロー内でオーケストレーションとして統合する。単一責任原則を維持する設計である。同じパターンで [[gap-detection]] も lint ワークフローに統合されている。
 
 ## テスト
 

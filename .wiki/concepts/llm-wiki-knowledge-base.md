@@ -14,6 +14,7 @@ related:
   - "concepts/llm-wiki-tooling.md"
   - "concepts/querylog.md"
   - "concepts/trust-score.md"
+  - "concepts/gap-detection.md"
 ---
 
 # LLM Wiki Knowledge Base
@@ -57,6 +58,10 @@ LLM Wiki のアプローチは根本的に異なる：
 - **Ingest**: ソースを取り込み、要約ページを作成し、関連する既存ページを横断的に更新。1つのソースが 10-15 ページに影響しうる。
 - **Query**: Wiki に対して質問し、引用付きの合成回答を得る。**良い回答は Wiki に新ページとして還元** できる — 探索も知識ベースに複利的に蓄積される。[[querylog]] がこのメタデータを構造化して蓄積し、知識ギャップの自動検出を可能にする。
 - **Lint**: 定期的にヘルスチェック。矛盾、古くなった主張、孤立ページ、欠けている相互参照、調査すべきギャップを検出。
+
+## ユースケースと運用ツール
+
+LLM Wiki はパーソナルナレッジ管理からビジネスまで幅広い適用先がある（[[llm-wiki-use-cases]] を参照）。運用には Obsidian や Dataview 等のツール群が補完的に機能する（[[llm-wiki-tooling]] を参照）。
 
 ## なぜ機能するのか
 

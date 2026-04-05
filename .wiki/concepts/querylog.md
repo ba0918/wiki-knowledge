@@ -11,6 +11,7 @@ related:
   - "concepts/wiki-knowledge-architecture.md"
   - "concepts/llm-wiki-knowledge-base.md"
   - "concepts/trust-score.md"
+  - "concepts/gap-detection.md"
 ---
 
 # QueryLog — Wiki Query のメタデータログ基盤
@@ -73,8 +74,8 @@ JSONL（JSON Lines）形式で `{wiki_root}/outputs/querylog.jsonl` に append-o
 QueryLog の核心的価値。query のたびに「Wiki にまだない知識」がトピック名として構造化・蓄積される。
 
 活用先:
-- **Gap Detection**: 頻度集計で「最もよく聞かれるがまだ記事がないトピック」を自動検出
-- **Auto Ingest 提案**: 高頻度ギャップに対して取り込むべきソースを提案
+- **[[gap-detection]]**: 頻度集計で「最もよく聞かれるがまだ記事がないトピック」を自動検出
+- **Auto Ingest 提案**: [[gap-detection]] により高頻度ギャップに対して取り込むべきソースを提案
 - **成長方向の可視化**: どの領域の知識が不足しているかをデータで把握
 
 これは [[llm-wiki-knowledge-base]] の「Query も知識ベースに複利的に蓄積される」思想を、メタデータレベルで実現するもの。
@@ -96,12 +97,12 @@ python3 querylog-stats.py --wiki-root .wiki
 QueryLog は [[wiki-knowledge-architecture]] の Output 層に属し、Phase 2+ 全機能の基盤:
 
 ```
-QueryLog (P0) → [[trust-score]] (P1) → Gap Detection + Auto Ingest (P2)
+QueryLog (P0) → [[trust-score]] (P1) → [[gap-detection]] + Auto Ingest (P2)
 ```
 
 - **[[trust-score]]**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
-- **Gap Detection**: gap_topics の頻度集計で知識ギャップを構造化
-- **Auto Ingest 提案**: 高頻度ギャップに対するソース候補の自動生成
+- **[[gap-detection]]**: gap_topics の頻度集計で知識ギャップを構造化
+- **Auto Ingest 提案**: [[gap-detection]] により高頻度ギャップに対するソース候補を自動生成
 
 ## 出典
 
