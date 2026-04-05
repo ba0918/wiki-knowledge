@@ -1,5 +1,16 @@
 # Session History
 
+## 2026-04-06 — Gap Detection + Auto Ingest 提案（Phase 2b+2c）
+
+| Field | Value |
+|-------|-------|
+| **Cycle ID** | `20260406030813` |
+| **Feature** | Gap Detection + Auto Ingest 提案 (2b+2c) |
+| **Started** | 2026-04-06 03:08:13 |
+| **Phase** | 🟢 Complete |
+| **Plan** | [docs/plans/20260406030813_gap-detection-auto-ingest.md](./plans/20260406030813_gap-detection-auto-ingest.md) |
+| **Result** | [docs/plans/results/20260406030813_gap-detection-auto-ingest_result.md](./plans/results/20260406030813_gap-detection-auto-ingest_result.md) |
+
 ## 2026-04-06 — Trust Score 実装（Phase 3a）
 
 | Field | Value |
