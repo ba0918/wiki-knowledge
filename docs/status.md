@@ -6,16 +6,7 @@
 
 ## 🎯 Current Session
 
-| Field | Value |
-|-------|-------|
-| **Cycle ID** | `20260406053703` |
-| **Feature** | 3b Lint 強化 |
-| **Started** | 2026-04-06 05:37:03 |
-| **Phase** | 🟢 Complete |
-| **Plan** | [docs/plans/20260406053703_lint-enhancement.md](./plans/20260406053703_lint-enhancement.md) |
-
-**Current Focus:**
-lint-wiki.py の拡張 — レポート出力、リンク品質、記事品質、フォーマット違反チェック、テスト追加
+_No active session_
 
 ---
 
