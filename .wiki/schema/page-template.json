@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wiki Page Frontmatter",
+  "description": "Wiki記事のフロントマター定義。全てのwiki/concepts/内の記事はこのスキーマに従う。",
+  "type": "object",
+  "required": ["title", "type", "source_refs", "created", "updated", "category", "tags"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "記事タイトル（日本語可）"
+    },
+    "type": {
+      "type": "string",
+      "const": "wiki",
+      "description": "ページ種別。Wiki記事は常に 'wiki'"
+    },
+    "source_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "{wiki_root}からの相対パス。この記事の根拠となるソースドキュメント",
+      "minItems": 1
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "作成日（YYYY-MM-DD）"
+    },
+    "updated": {
+      "type": "string",
+      "format": "date",
+      "description": "最終更新日（YYYY-MM-DD）"
+    },
+    "category": {
+      "type": "string",
+      "description": "categories.json で定義されたカテゴリ slug"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "検索用タグ（小文字、ハイフン区切り）"
+    },
+    "related": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "{wiki_root}からの相対パス。関連記事へのリンク"
+    }
+  },
+  "additionalProperties": false
+}
