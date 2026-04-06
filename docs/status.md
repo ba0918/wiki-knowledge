@@ -62,17 +62,22 @@ skills/wiki/
 │   ├── lint-procedure.md       (6つのLLM駆動チェック + 修復フロー)
 │   └── prompts.md              (各フェーズのプロンプトテンプレート)
 ├── scripts/
-│   ├── lint-wiki.py            (自動lint: dead link/orphan/missing source — テスト済み)
-│   ├── querylog_stats.py       (QueryLog 集計 — 15テスト)
+│   ├── lint-wiki.py            (自動lint: 8チェック + --format table/json/report)
+│   ├── test_lint_wiki.py       (lint-wiki テスト — 44テスト)
+│   ├── querylog_stats.py       (QueryLog 集計)
 │   ├── querylog-stats.py       (↑へのシンボリックリンク)
-│   └── test_querylog_stats.py  (querylog_stats テスト)
+│   ├── test_querylog_stats.py  (querylog_stats テスト — 15テスト)
+│   ├── trust_score.py          (Trust Score 算出)
+│   ├── test_trust_score.py     (trust_score テスト)
+│   ├── gap_detect.py           (Gap Detection + Auto Ingest 提案)
+│   └── test_gap_detect.py      (gap_detect テスト)
 └── assets/
     ├── wiki-article-template.md
     ├── index-template.md
     ├── log-template.md
     └── claude-md-template.md
 
-.wiki/                          (実データ — 記事4つ)
+.wiki/                          (実データ — 記事7つ)
 ├── .gitignore                  (querylog.jsonl を git 管理外に)
 ├── concepts/*.md               (4記事)
 ├── raw/articles/*.md           (ソース3件)

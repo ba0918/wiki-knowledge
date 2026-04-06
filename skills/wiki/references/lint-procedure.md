@@ -10,8 +10,20 @@ lint-wiki.py の自動チェックと LLM 駆動チェックの詳細手順。
 |---------|----------|---------|
 | Dead link | 🔴 Error | `[[slug]]` の参照先が `concepts/` に存在しない |
 | Missing source | 🔴 Error | `source_refs` のパスが `raw/` に存在しない |
+| Slug naming | 🔴 Error | ファイル名が `^[a-z0-9]+(-[a-z0-9]+)*$` に非準拠 |
+| Type invalid | 🔴 Error | `type` が `wiki` でない |
+| Source refs empty | 🔴 Error | `source_refs` が空配列（minItems: 1 違反） |
 | Orphan | 🟡 Warning | 他の記事から `[[wikilink]]` も `related` も参照されていない |
 | Missing frontmatter | 🟡 Warning | 必須フィールドが欠損 |
+| One-way link | 🟡 Warning | A→B の wikilink はあるが B→A の wikilink も related もない |
+| Related mismatch | 🟡 Warning | `related` FM にあるが本文 `[[wikilink]]` にない、またはその逆 |
+| Short article | 🟡 Warning | 本文（FM除く）が 50 words 未満 |
+| Speculation heavy | 🟡 Warning | `> [推測]` ブロックが本文行数の 30% 超 |
+| Schema violation | 🟡 Warning | `page-template.json` の required/type/const/additionalProperties 違反 |
+| Invalid category | 🟡 Warning | `categories.json` に存在しない category 値 |
+| Date format | 🟡 Warning | `created`/`updated` が YYYY-MM-DD 形式でない |
+| Tags format | 🟡 Warning | tags 要素が `^[a-z0-9-]+$` に非準拠 |
+| Related type | 🟡 Warning | `related` が配列でない、または要素が string でない |
 | Coverage gap | 🔵 Info | `[[slug]]` が2回以上参照されているが記事が存在しない |
 
 ## LLM 駆動チェック（6項目）
