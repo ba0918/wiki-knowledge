@@ -22,7 +22,7 @@ Ingest → Compile → Query → Lint
 | コマンド | 説明 |
 |---------|------|
 | `/wiki-init` | プロジェクトに Wiki 構造をブートストラップ |
-| `/wiki-cycle` | Ingest → Compile → Lint を一括実行 |
+| `/wiki-cycle` | Ingest → Compile → Graph Gen → Lint を一括実行 |
 | `/wiki` | サブコマンド一覧・ルーティング |
 
 ## インストール
