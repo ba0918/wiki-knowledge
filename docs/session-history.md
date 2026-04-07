@@ -1,5 +1,16 @@
 # Session History
 
+## 2026-04-07 — Wiki Docs Graph Layer Sync
+
+| Field | Value |
+|-------|-------|
+| **Cycle ID** | `20260407232114` |
+| **Feature** | wiki スキル ドキュメント整合性修正（graph layer MVP 反映） |
+| **Started** | 2026-04-07 23:21:14 |
+| **Phase** | 🟢 Complete |
+| **Plan** | [docs/plans/20260407232114_wiki-docs-graph-layer-sync.md](./plans/20260407232114_wiki-docs-graph-layer-sync.md) |
+| **Result** | [docs/plans/results/20260407232114_wiki-docs-graph-layer-sync_result.md](./plans/results/20260407232114_wiki-docs-graph-layer-sync_result.md) |
+
 ## 2026-04-07 — Wiki Lint Pre-existing Issues 修正
 
 | Field | Value |
