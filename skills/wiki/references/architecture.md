@@ -69,6 +69,35 @@ wiki_root: .wiki
 
 Wiki 内のパスは全て `{wiki_root}` からの相対パス。
 
+## 既存 Wiki への graph layer 後付け移行
+
+graph layer 導入前に作成された Wiki（`{wiki_root}/.gitignore` や `outputs/graph.json` が存在しない状態）を移行する場合、以下の手順を一度だけ実行する。新規 `wiki init` で作成された Wiki では不要。
+
+### 手順
+
+1. **`.gitignore` の配置**
+   - `skills/wiki/assets/wiki-gitignore-template` を `{wiki_root}/.gitignore` にコピー
+   - 既に `{wiki_root}/.gitignore` が存在する場合は、テンプレート内の各行について未記載のものだけを追記（merge 方式）。最低限以下の3行が含まれていればよい:
+     ```
+     outputs/querylog.jsonl
+     outputs/inventory.json
+     outputs/graph.json
+     ```
+2. **graph 初回生成**
+   ```bash
+   python3 skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}
+   ```
+   `outputs/graph.json` が生成される。`.gitignore` 先行配置により誤コミットを防ぐ。
+3. **以降の運用**
+   - `wiki cycle` は `compile → graph_gen → lint` を自動で回すので追加操作は不要
+   - 単体 lint 実行時も `lint-wiki.py --use-graph`（デフォルト ON）が `outputs/graph.json` を参照する
+   - graph 再生成が必要になったら `lint-wiki.py --auto-graph` または `graph_gen.py` を直接実行
+
+### 注意
+
+- 手順1（`.gitignore` 配置）を飛ばして手順2を先に実行すると、`outputs/graph.json` が git index に入ってしまう可能性がある。必ず `.gitignore` を先に配置すること
+- 既に `outputs/` 配下の派生ファイルがコミットされている場合は `git rm --cached outputs/graph.json outputs/inventory.json outputs/querylog.jsonl` で index から外す
+
 ## Backlink Audit
 
 Compile / Promote 時の必須ステップ。新記事を追加したら、既存記事を走査して双方向リンクを確立する。

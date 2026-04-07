@@ -21,7 +21,7 @@ LLM がソースドキュメントを知識ベース（相互参照付き Markdo
 
 詳細情報は以下を参照。必要になったときに読み込む。
 
-- [references/architecture.md](references/architecture.md) — 3層構造、4相パイプライン、Backlink Audit の設計思想
+- [references/architecture.md](references/architecture.md) — 3層構造、4相パイプライン、Backlink Audit の設計思想、既存 Wiki への graph layer 後付け移行手順
 - [references/compilation-guide.md](references/compilation-guide.md) — Compile 時の語調、wikilink 密度、出典ルール、記事粒度
 - [references/frontmatter-schemas.md](references/frontmatter-schemas.md) — 各ファイル種別のフロントマター定義
 - [references/lint-procedure.md](references/lint-procedure.md) — Lint の6つの LLM 駆動チェック項目と修復フロー
@@ -93,6 +93,8 @@ CLAUDE.md に `wiki_root` が既に存在する場合、再初期化するか確
    - `{wiki_root}/schema/categories.json` — カテゴリ定義
    - `{wiki_root}/index.md` — 空のインデックス
    - `{wiki_root}/log.md` — 初期ログエントリ付き
+   - `{wiki_root}/.gitignore` — graph layer 生成物除外（`assets/wiki-gitignore-template` をコピー）
+     - 既に `{wiki_root}/.gitignore` が存在する場合は上書きせず、テンプレート内の各行について未記載のものだけを追記（merge 方式）
 4. プロジェクトルートの `CLAUDE.md` を設定:
    - **CLAUDE.md がない場合**: `assets/claude-md-template.md` を元に新規作成。YAML フロントマターに `wiki_root` を設定
    - **CLAUDE.md はあるが YAML フロントマターがない場合**: ファイル先頭に `---\nwiki_root: {path}\n---` を挿入
