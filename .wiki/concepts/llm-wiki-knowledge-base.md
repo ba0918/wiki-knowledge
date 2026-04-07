@@ -15,6 +15,7 @@ related:
   - "concepts/querylog.md"
   - "concepts/trust-score.md"
   - "concepts/gap-detection.md"
+  - "concepts/graphify-knowledge-graph-concepts.md"
 ---
 
 # LLM Wiki Knowledge Base
@@ -76,6 +77,13 @@ Vannevar Bush の Memex（1945）— 文書間の連想的な辿り（associativ
 - **Claude Skill として提供**: 構築フローをスキル化し、既存プロジェクトに導入可能にする
 - **先人の実装を参照**: 複数の既存実装の良いところを取り入れて構築する
 - **実験的アプローチ**: 仕組みが適切に機能するかどうかを検証する
+
+## 関連
+
+同じ Karpathy 系譜から派生した graph ベースの構造化アプローチは [[graphify-knowledge-graph-concepts]] を参照。
+
+- [[trust-score]] — 記事ごとの信頼度を 4 要素で算出する仕組み
+- [[gap-detection]] — QueryLog から知識ギャップを検出し ingest 提案を行う
 
 ## 出典
 

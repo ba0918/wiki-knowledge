@@ -12,6 +12,7 @@ related:
   - "concepts/trust-score.md"
   - "concepts/wiki-knowledge-architecture.md"
   - "concepts/llm-wiki-knowledge-base.md"
+  - "concepts/graphify-knowledge-graph-concepts.md"
 ---
 
 # Gap Detection
@@ -96,6 +97,10 @@ QueryLog (P0) → Trust Score (P1) → Gap Detection + Auto Ingest (P2)
 ## テスト
 
 21件のテストケースで、トークン化（英語・日本語・混在）、カバレッジ計算の境界値、ギャップ検出の threshold 制御、提案の priority 正規化、出力フォーマットの構造をカバーしている。
+
+## 関連
+
+Leiden クラスタリングや共引用ベースの missing edge 検出による将来的な強化案は [[graphify-knowledge-graph-concepts]] を参照。
 
 ## 出典
 

@@ -12,6 +12,7 @@ related:
   - "concepts/wiki-knowledge-architecture.md"
   - "concepts/llm-wiki-knowledge-base.md"
   - "concepts/gap-detection.md"
+  - "concepts/graphify-knowledge-graph-concepts.md"
 ---
 
 # Trust Score
@@ -87,6 +88,10 @@ python3 trust_score.py --wiki-root .wiki [--format table|json|report]
 ## テスト
 
 28件のテストケースで正規化の境界値、backlink の deduplicate、フォールバック重み配分、鮮度の線形減衰、重み定数の合計検証などをカバーしている。
+
+## 関連
+
+エッジ単位の信頼度ラベルを graph 構造に統合する将来案については [[graphify-knowledge-graph-concepts]] を参照。
 
 ## 出典
 

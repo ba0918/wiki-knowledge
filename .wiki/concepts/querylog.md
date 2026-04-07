@@ -12,6 +12,7 @@ related:
   - "concepts/llm-wiki-knowledge-base.md"
   - "concepts/trust-score.md"
   - "concepts/gap-detection.md"
+  - "concepts/graphify-knowledge-graph-concepts.md"
 ---
 
 # QueryLog — Wiki Query のメタデータログ基盤
@@ -103,6 +104,10 @@ QueryLog (P0) → [[trust-score]] (P1) → [[gap-detection]] + Auto Ingest (P2)
 - **[[trust-score]]**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
 - **[[gap-detection]]**: gap_topics の頻度集計で知識ギャップを構造化
 - **Auto Ingest 提案**: [[gap-detection]] により高頻度ギャップに対するソース候補を自動生成
+
+## 関連
+
+`sources_cited` を共引用シグナルとして missing edge 検出に活用する将来案は [[graphify-knowledge-graph-concepts]] を参照。
 
 ## 出典
 
