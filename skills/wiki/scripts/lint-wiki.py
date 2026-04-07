@@ -105,6 +105,37 @@ def _build_inventory(wiki_root: Path) -> dict[str, ArticleInventory]:
 # Check functions (pure: inventory in → findings out)
 # ---------------------------------------------------------------------------
 
+def _check_wikilink_rendering(
+    inventory: dict[str, ArticleInventory],
+) -> list[Finding]:
+    """Check: detect bare ``[[slug]]`` not followed by GitHub-clickable suffix.
+
+    The renderer (``wikilink_render.py``) appends ``([↗](slug.md))`` after each
+    wikilink so GitHub Web UI can navigate the link. This check reports any
+    article whose body still contains an un-rendered wikilink. Severity is
+    warning — compile pipeline normalizes the form, so failures here usually
+    mean a manual edit drifted out of sync.
+    """
+    # Lazy import to avoid circular concerns; the renderer module owns the
+    # canonical regex / masking logic.
+    from wikilink_render import render_wikilinks  # noqa: WPS433
+
+    findings: list[Finding] = []
+    for slug, article in inventory.items():
+        rendered = render_wikilinks(article.text)
+        if rendered != article.text:
+            findings.append(Finding(
+                severity="warning",
+                check="wikilink_rendering",
+                slug=slug,
+                message=(
+                    f"{slug} contains bare [[wikilink]] without GitHub-clickable "
+                    f"suffix; run wikilink_render.py --write to fix"
+                ),
+            ))
+    return findings
+
+
 def _check_dead_links(inventory: dict[str, ArticleInventory]) -> list[Finding]:
     """Check 1: Detect wikilinks that point to non-existent articles."""
     findings: list[Finding] = []
@@ -617,6 +648,7 @@ def lint(wiki_root: Path, *, use_graph: bool = False) -> list[Finding]:
     findings.extend(_check_link_quality(inventory))
     findings.extend(_check_article_quality(inventory))
     findings.extend(_check_format(inventory, wiki_root, schema, categories))
+    findings.extend(_check_wikilink_rendering(inventory))
 
     return findings
 

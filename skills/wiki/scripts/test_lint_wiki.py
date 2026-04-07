@@ -46,6 +46,7 @@ _check_coverage_gaps = _mod._check_coverage_gaps
 _check_link_quality = _mod._check_link_quality
 _check_article_quality = _mod._check_article_quality
 _check_format = _mod._check_format
+_check_wikilink_rendering = _mod._check_wikilink_rendering
 format_table = _mod.format_table
 format_json = _mod.format_json
 format_report = _mod.format_report
@@ -868,3 +869,46 @@ class TestAutoGraphFallback:
         # graph.json should be untouched (auto-graph only triggers on missing)
         assert graph_path.stat().st_mtime == before_mtime
         assert graph_path.read_text(encoding="utf-8") == before_content
+
+
+# ---------------------------------------------------------------------------
+# Wikilink rendering check
+# ---------------------------------------------------------------------------
+
+class TestCheckWikilinkRendering:
+    def _make(self, slug: str, body: str) -> ArticleInventory:
+        return ArticleInventory(
+            slug=slug,
+            path=f"concepts/{slug}.md",
+            sha256="x",
+            title=slug,
+            category="concepts",
+            type="wiki",
+            updated="2026-01-01",
+            tags=(),
+            wikilinks=(),
+            source_refs=(),
+            frontmatter={},
+            text=body,
+            body=body,
+        )
+
+    def test_detects_bare_wikilink(self):
+        art = self._make("a", "see [[foo]] here")
+        findings = _check_wikilink_rendering({"a": art})
+        assert len(findings) == 1
+        assert findings[0].check == "wikilink_rendering"
+        assert findings[0].severity == "warning"
+        assert findings[0].slug == "a"
+
+    def test_clean_when_already_rendered(self):
+        art = self._make("a", "see [[foo]] ([↗](foo.md)) here")
+        assert _check_wikilink_rendering({"a": art}) == []
+
+    def test_ignores_inline_code(self):
+        art = self._make("a", "literal `[[foo]]` here")
+        assert _check_wikilink_rendering({"a": art}) == []
+
+    def test_no_wikilinks_no_finding(self):
+        art = self._make("a", "plain text")
+        assert _check_wikilink_rendering({"a": art}) == []
