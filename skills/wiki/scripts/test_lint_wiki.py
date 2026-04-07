@@ -81,6 +81,55 @@ VALID_FM = textwrap.dedent("""\
 """)
 
 
+def test_find_wikilinks_still_extracts_plain():
+    assert find_wikilinks("see [[foo]] and [[bar-baz]]") == ["foo", "bar-baz"]
+
+
+def test_find_wikilinks_ignores_inline_code_span():
+    text = "Use `[[wikilink]]` syntax to link, e.g. [[real-slug]]."
+    assert find_wikilinks(text) == ["real-slug"]
+
+
+def test_find_wikilinks_ignores_fenced_code_block():
+    text = "Intro [[real]] then:\n```\n[[bar]]\n[[baz]]\n```\nAfter [[tail]]."
+    assert find_wikilinks(text) == ["real", "tail"]
+
+
+def test_dead_link_check_skips_example_wikilinks(tmp_path):
+    body = textwrap.dedent("""\
+        ---
+        title: Example
+        type: wiki
+        category: concepts
+        created: 2026-01-01
+        updated: 2026-01-01
+        tags: [test]
+        ---
+
+        # Example
+
+        Use the `[[wikilink]]` notation. Inside fences:
+        ```
+        [[foo]]
+        ```
+        End.
+        """)
+    wiki_root = _make_wiki_basic(tmp_path, {"example": body})
+    inv = _build_inventory(wiki_root)
+    findings = _check_dead_links(inv)
+    assert [f for f in findings if f.check == "dead_link"] == []
+
+
+def _make_wiki_basic(tmp_path: Path, articles: dict[str, str]) -> Path:
+    wiki_root = tmp_path / ".wiki"
+    concepts = wiki_root / "concepts"
+    concepts.mkdir(parents=True)
+    for slug, content in articles.items():
+        (concepts / f"{slug}.md").write_text(content, encoding="utf-8")
+    (wiki_root / "schema").mkdir(parents=True, exist_ok=True)
+    return wiki_root
+
+
 def _make_wiki(tmp_path: Path, articles: dict[str, str], *,
                schema: dict | None = None,
                categories: list | None = None,

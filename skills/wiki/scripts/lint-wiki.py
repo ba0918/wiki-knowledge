@@ -54,9 +54,20 @@ class ArticleInventory:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+
 def find_wikilinks(text: str) -> list[str]:
-    """Extract [[slug]] references from text."""
-    return re.findall(r"\[\[([a-z0-9-]+)\]\]", text)
+    """Extract [[slug]] references from text.
+
+    Wikilinks inside fenced code blocks (```...```) and inline code spans
+    (`...`) are excluded so that documentation/example mentions do not
+    produce dead-link findings.
+    """
+    stripped = _FENCE_RE.sub("", text)
+    stripped = _INLINE_CODE_RE.sub("", stripped)
+    return re.findall(r"\[\[([a-z0-9-]+)\]\]", stripped)
 
 
 def parse_frontmatter(text: str) -> dict:
