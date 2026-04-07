@@ -1,12 +1,18 @@
 # Project Status
 
-**Last Updated:** 2026-04-07 23:21:14
+**Last Updated:** 2026-04-08 00:58:42
 
 ---
 
 ## 🎯 Current Session
 
-_No active session_
+| Field | Value |
+|-------|-------|
+| Cycle ID | 20260408005842 |
+| Feature | wikilink GitHub 追跡性改善 — 自動併記スクリプトと lint チェック |
+| Started | 2026-04-08 00:58:42 |
+| Phase | 🟡 Planning |
+| Plan | [docs/plans/20260408005842_wikilink-github-rendering.md](./plans/20260408005842_wikilink-github-rendering.md) |
 
 ---
 
