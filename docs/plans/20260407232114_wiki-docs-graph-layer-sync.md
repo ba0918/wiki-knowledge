@@ -147,3 +147,18 @@ graph layer MVP（コミット d1a58ff）の導入後、実装は健全だがド
 
 - 前回 plan: graph layer MVP 導入（コミット d1a58ff）
 - investigate レポート: Critical 4 / Warning 4
+
+## Additional Changes (2026-04-07)
+
+### Instructions
+graph layer 後付け移行ギャップを修正する（init に .gitignore 配置ステップ追加、既存 wiki 向け移行手順の文書化）。
+
+### Changes Made
+- `skills/wiki/assets/wiki-gitignore-template` 新設（outputs/querylog.jsonl, outputs/inventory.json, outputs/graph.json）
+- `skills/wiki/SKILL.md` init プロセスに `.gitignore` 配置ステップを追加（既存ファイル merge 方式を明記）、references/architecture.md への参照文言を更新
+- `skills/wiki/references/architecture.md` に「既存 Wiki への graph layer 後付け移行」セクション追加（.gitignore 先行 → graph_gen 初回 → 以降 cycle/--auto-graph）
+
+### Review Results
+- Security: PASS（シークレット・パストラバーサルなし、ドキュメント変更のみ）
+- Implementation Quality: PASS（既存 .wiki/.gitignore と内容一致、merge 配慮明記）
+- Codex Second Opinion: skipped（doc-only 変更のため省略）
