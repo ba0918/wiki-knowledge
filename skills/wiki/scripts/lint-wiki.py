@@ -22,6 +22,19 @@ from dataclasses import dataclass, asdict
 from datetime import date
 from pathlib import Path
 
+# Make the sibling ``lib/`` package importable when this script is executed
+# directly (``python lint-wiki.py``).
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+from lib.inventory import (  # noqa: E402  (import after sys.path tweak)
+    ArticleInventory,
+    build_inventory as _build_inventory_lib,
+    find_wikilinks as _find_wikilinks_lib,
+    parse_frontmatter as _parse_frontmatter_lib,
+)
+
 
 # ---------------------------------------------------------------------------
 # Data types (immutable)
@@ -38,84 +51,27 @@ class Finding:
     details: dict | None = None  # check-specific extra info
 
 
-@dataclass(frozen=True)
-class ArticleInventory:
-    """Metadata for a single wiki article."""
-
-    slug: str
-    path: str
-    frontmatter: dict
-    wikilinks: list[str]
-    text: str              # full file content
-    body: str              # content after frontmatter
+# ``ArticleInventory`` is re-exported from :mod:`lib.inventory` for backwards
+# compatibility with the historical public surface of this module.
+__all__ = ["Finding", "ArticleInventory"]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-
+# The parsing primitives live in :mod:`lib.inventory` now; thin re-exports
+# keep the historical ``lint_wiki.find_wikilinks`` / ``lint_wiki.parse_frontmatter``
+# API intact for downstream scripts and tests.
 
 def find_wikilinks(text: str) -> list[str]:
-    """Extract [[slug]] references from text.
-
-    Wikilinks inside fenced code blocks (```...```) and inline code spans
-    (`...`) are excluded so that documentation/example mentions do not
-    produce dead-link findings.
-    """
-    stripped = _FENCE_RE.sub("", text)
-    stripped = _INLINE_CODE_RE.sub("", stripped)
-    return re.findall(r"\[\[([a-z0-9-]+)\]\]", stripped)
+    """Extract ``[[slug]]`` references (delegates to :mod:`lib.inventory`)."""
+    return _find_wikilinks_lib(text)
 
 
 def parse_frontmatter(text: str) -> dict:
-    """Extract YAML frontmatter as a simple key-value dict."""
-    if not text.startswith("---"):
-        return {}
-    end = text.find("---", 3)
-    if end == -1:
-        return {}
-    fm: dict = {}
-    last_key: str | None = None
-    for line in text[3:end].strip().splitlines():
-        stripped = line.strip()
-        # List item (indented "- value")
-        if stripped.startswith("- ") and last_key is not None:
-            if not isinstance(fm.get(last_key), list):
-                fm[last_key] = [] if not fm.get(last_key) else [fm[last_key]]
-            fm[last_key].append(
-                stripped.removeprefix("- ").strip('"').strip("'")
-            )
-        elif ":" in line and not stripped.startswith("-"):
-            key, _, value = line.partition(":")
-            key = key.strip()
-            value = value.strip()
-            last_key = key
-            # Inline array: [a, b, c]
-            if value.startswith("[") and value.endswith("]"):
-                fm[key] = [
-                    v.strip().strip('"').strip("'")
-                    for v in value[1:-1].split(",")
-                    if v.strip()
-                ]
-            elif value == "":
-                # Next lines may be list items
-                fm[key] = []
-            else:
-                fm[key] = value.strip('"').strip("'")
-    return fm
-
-
-def _extract_body(text: str) -> str:
-    """Return text content after frontmatter (if any)."""
-    if not text.startswith("---"):
-        return text
-    end = text.find("---", 3)
-    if end == -1:
-        return text
-    return text[end + 3:].strip()
+    """Parse YAML-ish frontmatter (delegates to :mod:`lib.inventory`)."""
+    return _parse_frontmatter_lib(text)
 
 
 def _normalize_slug(ref: str) -> str:
@@ -136,28 +92,13 @@ def _normalize_slug(ref: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_inventory(wiki_root: Path) -> dict[str, ArticleInventory]:
-    """Build an inventory of all articles in concepts/."""
-    concepts_dir = wiki_root / "concepts"
-    if not concepts_dir.exists():
-        return {}
+    """Build an inventory of all articles in ``concepts/``.
 
-    inventory: dict[str, ArticleInventory] = {}
-    for md_file in sorted(concepts_dir.glob("*.md")):
-        slug = md_file.stem
-        text = md_file.read_text(encoding="utf-8")
-        fm = parse_frontmatter(text)
-        body = _extract_body(text)
-        wikilinks = find_wikilinks(text)
-
-        inventory[slug] = ArticleInventory(
-            slug=slug,
-            path=str(md_file),
-            frontmatter=fm,
-            wikilinks=wikilinks,
-            text=text,
-            body=body,
-        )
-    return inventory
+    Delegates to :func:`lib.inventory.build_inventory`; kept here as a thin
+    shim so existing tests (which import ``_build_inventory`` from this
+    module) continue to work unchanged.
+    """
+    return _build_inventory_lib(wiki_root)
 
 
 # ---------------------------------------------------------------------------
@@ -565,8 +506,76 @@ def format_report(findings: list[Finding], *, today: date | None = None) -> str:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def lint(wiki_root: Path) -> list[Finding]:
-    """Run all lint checks and return a flat list of findings."""
+class GraphNotFoundError(FileNotFoundError):
+    """Raised when ``--use-graph`` is enabled but graph.json is missing.
+
+    The CLI translates this into ``exit 2`` with an actionable stderr
+    message pointing to ``graph_gen.py``. Layered on top of
+    :class:`FileNotFoundError` so callers that don't care about the
+    distinction still catch it.
+    """
+
+
+def _load_graph_or_raise(wiki_root: Path) -> dict:
+    """Load ``.wiki/outputs/graph.json`` or raise :class:`GraphNotFoundError`."""
+    graph_path = wiki_root / "outputs" / "graph.json"
+    if not graph_path.exists():
+        raise GraphNotFoundError(str(graph_path))
+    return json.loads(graph_path.read_text(encoding="utf-8"))
+
+
+def _check_dead_links_from_graph(
+    inventory: dict[str, ArticleInventory], graph: dict,
+) -> list[Finding]:
+    """Graph-consumer variant: read ``metadata.dangling_links``."""
+    findings: list[Finding] = []
+    dangling = graph.get("metadata", {}).get("dangling_links", [])
+    for entry in dangling:
+        src = entry.get("source", "")
+        tgt = entry.get("target", "")
+        if src not in inventory:
+            continue
+        findings.append(Finding(
+            severity="error",
+            check="dead_link",
+            slug=src,
+            message=f"[[{tgt}]] in {src} -> concepts/{tgt}.md does not exist",
+            details={"target": tgt},
+        ))
+    return findings
+
+
+def _check_orphans_from_graph(
+    inventory: dict[str, ArticleInventory], graph: dict,
+) -> list[Finding]:
+    """Graph-consumer variant: derive inbound degree from edges."""
+    inbound: dict[str, set[str]] = {}
+    for edge in graph.get("edges", []):
+        src = edge.get("source", "")
+        tgt = edge.get("target", "")
+        if tgt in inventory:
+            inbound.setdefault(tgt, set()).add(src)
+
+    findings: list[Finding] = []
+    for slug in inventory:
+        if slug not in inbound or len(inbound[slug]) == 0:
+            findings.append(Finding(
+                severity="warning",
+                check="orphan",
+                slug=slug,
+                message=f"{slug} has no inbound [[wikilink]] from other articles",
+            ))
+    return findings
+
+
+def lint(wiki_root: Path, *, use_graph: bool = False) -> list[Finding]:
+    """Run all lint checks and return a flat list of findings.
+
+    When ``use_graph`` is True, dead-link and orphan detection reads from
+    ``.wiki/outputs/graph.json`` instead of re-computing from the in-memory
+    inventory. The two paths must produce identical findings — the
+    ``test_lint_wiki.py::TestGraphConsumerMode`` tests enforce this.
+    """
     concepts_dir = wiki_root / "concepts"
     if not concepts_dir.exists():
         return [Finding(
@@ -593,8 +602,15 @@ def lint(wiki_root: Path) -> list[Finding]:
         categories = json.loads(categories_path.read_text(encoding="utf-8"))
 
     findings: list[Finding] = []
-    findings.extend(_check_dead_links(inventory))
-    findings.extend(_check_orphans(inventory))
+
+    if use_graph:
+        graph = _load_graph_or_raise(wiki_root)  # may raise GraphNotFoundError
+        findings.extend(_check_dead_links_from_graph(inventory, graph))
+        findings.extend(_check_orphans_from_graph(inventory, graph))
+    else:
+        findings.extend(_check_dead_links(inventory))
+        findings.extend(_check_orphans(inventory))
+
     findings.extend(_check_missing_sources(inventory, wiki_root))
     findings.extend(_check_missing_fm(inventory))
     findings.extend(_check_coverage_gaps(inventory))
@@ -634,6 +650,24 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="fmt",
         help="Output format (default: table)",
     )
+    graph_group = parser.add_mutually_exclusive_group()
+    graph_group.add_argument(
+        "--use-graph",
+        dest="use_graph",
+        action="store_true",
+        default=True,
+        help=(
+            "Read dead-link / orphan from .wiki/outputs/graph.json "
+            "(default). If the file is missing, exit 2 with a message "
+            "pointing to graph_gen.py."
+        ),
+    )
+    graph_group.add_argument(
+        "--no-graph",
+        dest="use_graph",
+        action="store_false",
+        help="Legacy path: recompute dead-link/orphan from inventory only.",
+    )
     return parser
 
 
@@ -651,7 +685,17 @@ def main() -> None:
         print(f"Error: {wiki_root} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    findings = lint(wiki_root)
+    try:
+        findings = lint(wiki_root, use_graph=args.use_graph)
+    except GraphNotFoundError as exc:
+        print(
+            f"Error: graph.json not found at {exc}.\n"
+            f"Run: python {Path(__file__).with_name('graph_gen.py')} "
+            f"--wiki-root {wiki_root}\n"
+            "Or pass --no-graph to use the legacy inventory-only path.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if args.fmt == "json":
         print(format_json(findings))

@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Wiki Inventory",
+  "description": "Deterministic derivation of .wiki/concepts/*.md metadata. Read-only view — regenerate via skills/wiki/scripts/graph_gen.py.",
+  "type": "object",
+  "required": ["version", "generated_at", "wiki_root", "articles"],
+  "properties": {
+    "version": {"type": "string", "const": "1.0"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "wiki_root": {"type": "string"},
+    "articles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "slug", "path", "sha256", "title", "category", "type",
+          "updated", "tags", "wikilinks", "source_refs", "frontmatter"
+        ],
+        "properties": {
+          "slug": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "title": {"type": "string"},
+          "category": {"type": "string"},
+          "type": {"type": "string"},
+          "updated": {"type": "string"},
+          "tags": {"type": "array", "items": {"type": "string"}},
+          "wikilinks": {"type": "array", "items": {"type": "string"}},
+          "source_refs": {"type": "array", "items": {"type": "string"}},
+          "frontmatter": {"type": "object"}
+        }
+      }
+    }
+  }
+}

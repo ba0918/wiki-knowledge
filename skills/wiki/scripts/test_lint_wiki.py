@@ -51,6 +51,7 @@ format_json = _mod.format_json
 format_report = _mod.format_report
 lint = _mod.lint
 _normalize_slug = _mod._normalize_slug
+GraphNotFoundError = _mod.GraphNotFoundError
 
 
 # ---------------------------------------------------------------------------
@@ -225,9 +226,22 @@ class TestDataclasses:
         assert f.details == {"target": "b"}
 
     def test_article_inventory_is_frozen(self):
-        a = ArticleInventory(slug="a", path="/a.md", frontmatter={},
-                             wikilinks=[], text="", body="")
-        with pytest.raises(AttributeError):
+        a = ArticleInventory(
+            slug="a",
+            path="a.md",
+            sha256="0" * 64,
+            title="A",
+            category="concepts",
+            type="wiki",
+            updated="2026-01-01",
+            tags=(),
+            wikilinks=(),
+            source_refs=(),
+            frontmatter={},
+            text="",
+            body="",
+        )
+        with pytest.raises((AttributeError, TypeError)):
             a.slug = "b"  # type: ignore[misc]
 
 
@@ -696,3 +710,86 @@ class TestLintOrchestrator:
         assert len(findings) == 1
         assert findings[0].check == "structure"
         assert findings[0].severity == "error"
+
+
+# ===========================================================================
+# Graph consumer mode (lint reads .wiki/outputs/graph.json)
+# ===========================================================================
+
+class TestGraphConsumerMode:
+    def _fm(self, slug: str, body: str) -> str:
+        return textwrap.dedent(f"""\
+            ---
+            title: {slug}
+            type: wiki
+            source_refs:
+              - "raw/articles/{slug}.md"
+            created: 2026-01-01
+            updated: 2026-01-01
+            category: concepts
+            tags: [test]
+            ---
+
+            # {slug}
+
+            {body}
+            """)
+
+    def _setup(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {
+                "foo": self._fm("foo", "Links [[bar]] and dead [[ghost]]."),
+                "bar": self._fm("bar", "Points back [[foo]]."),
+                "baz": self._fm("baz", "Orphan-ish [[foo]] reference."),
+            },
+            raw_files=[
+                "raw/articles/foo.md",
+                "raw/articles/bar.md",
+                "raw/articles/baz.md",
+            ],
+        )
+        # Generate graph.json via the real generator — no mocks.
+        from graph_gen import generate
+        generate(wiki_root, generated_at="2026-04-07T00:00:00Z")
+        return wiki_root
+
+    def test_use_graph_matches_legacy_dead_and_orphan(self, tmp_path):
+        wiki_root = self._setup(tmp_path)
+        legacy = lint(wiki_root, use_graph=False)
+        graphed = lint(wiki_root, use_graph=True)
+
+        def _pick(fs, checks):
+            return sorted(
+                (f.check, f.slug, f.message)
+                for f in fs
+                if f.check in checks
+            )
+
+        targeted = {"dead_link", "orphan"}
+        assert _pick(legacy, targeted) == _pick(graphed, targeted)
+
+    def test_use_graph_missing_raises(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {"foo": self._fm("foo", "Body text here.")},
+            raw_files=["raw/articles/foo.md"],
+        )
+        GraphNotFoundError = _mod.GraphNotFoundError
+        with pytest.raises(GraphNotFoundError):
+            lint(wiki_root, use_graph=True)
+
+    def test_dead_link_from_graph_reads_dangling(self, tmp_path):
+        wiki_root = self._setup(tmp_path)
+        findings = lint(wiki_root, use_graph=True)
+        dead = [f for f in findings if f.check == "dead_link"]
+        assert any(f.details["target"] == "ghost" for f in dead)
+
+    def test_orphan_from_graph_respects_edges(self, tmp_path):
+        wiki_root = self._setup(tmp_path)
+        findings = lint(wiki_root, use_graph=True)
+        orphans = {f.slug for f in findings if f.check == "orphan"}
+        # `baz` is orphan (nobody links to it); `foo` and `bar` are linked.
+        assert "baz" in orphans
+        assert "foo" not in orphans
+        assert "bar" not in orphans

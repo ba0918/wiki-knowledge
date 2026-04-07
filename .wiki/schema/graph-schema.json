@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Wiki Knowledge Graph",
+  "description": "Read-only graph view derived from inventory.json. Version 1.0 reserves _custom / claim_id / co_citation_* fields for Layer 3.",
+  "type": "object",
+  "required": ["version", "generated_at", "metadata", "nodes", "edges"],
+  "properties": {
+    "version": {"type": "string", "const": "1.0"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "metadata": {
+      "type": "object",
+      "required": ["node_count", "edge_count", "source_inventory_sha256", "dangling_links"],
+      "properties": {
+        "node_count": {"type": "integer", "minimum": 0},
+        "edge_count": {"type": "integer", "minimum": 0},
+        "source_inventory_sha256": {"type": "string"},
+        "dangling_links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "target"],
+            "properties": {
+              "source": {"type": "string"},
+              "target": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "slug", "type", "category", "_custom"],
+        "properties": {
+          "id": {"type": "string"},
+          "slug": {"type": "string"},
+          "type": {"type": "string", "enum": ["article"]},
+          "category": {"type": "string"},
+          "_custom": {"type": "object"}
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source", "target", "relation_type", "weight",
+          "co_citation_count", "co_citation_frequency",
+          "confidence", "sources", "claim_id", "_custom"
+        ],
+        "properties": {
+          "source": {"type": "string"},
+          "target": {"type": "string"},
+          "relation_type": {"type": "string", "enum": ["wikilink"]},
+          "weight": {"type": "number"},
+          "co_citation_count": {"type": "integer", "minimum": 0},
+          "co_citation_frequency": {"type": "number"},
+          "confidence": {"type": "number"},
+          "sources": {"type": "array", "items": {"type": "string"}},
+          "claim_id": {"type": ["string", "null"]},
+          "_custom": {"type": "object"}
+        }
+      }
+    }
+  }
+}

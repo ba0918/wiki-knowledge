@@ -1,1 +1,3 @@
 outputs/querylog.jsonl
+outputs/inventory.json
+outputs/graph.json
