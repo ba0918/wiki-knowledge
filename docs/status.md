@@ -1,12 +1,20 @@
 # Project Status
 
-**Last Updated:** 2026-04-07 21:26:01
+**Last Updated:** 2026-04-07 23:21:14
 
 ---
 
 ## 🎯 Current Session
 
-_No active session_
+| Field | Value |
+|-------|-------|
+| Cycle ID | 20260407232114 |
+| Feature | wiki スキル ドキュメント整合性修正（graph layer MVP 反映） |
+| Started | 2026-04-07 23:21:14 |
+| Phase | 🟢 Complete |
+| Plan | [plans/20260407232114_wiki-docs-graph-layer-sync.md](./plans/20260407232114_wiki-docs-graph-layer-sync.md) |
+
+**Current Focus:** investigate で検出された Critical 4 / Warning 4 のドキュメント乖離を修正し、graph layer を SKILL.md / CLAUDE.md / references に反映。W1 は lint `--auto-graph` opt-in + cycle 明示呼出の両立で解決。
 
 ---
 
