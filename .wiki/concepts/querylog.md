@@ -17,11 +17,11 @@ related:
 
 # QueryLog — Wiki Query のメタデータログ基盤
 
-> wiki-query 実行時にクエリのメタデータを JSONL で蓄積する仕組み。後続の [[trust-score]]・Gap Detection・Auto Ingest 提案の基盤データレイヤーとして機能する。
+> wiki-query 実行時にクエリのメタデータを JSONL で蓄積する仕組み。後続の [[trust-score]] ([↗](trust-score.md))・Gap Detection・Auto Ingest 提案の基盤データレイヤーとして機能する。
 
 ## 目的と背景
 
-[[wiki-knowledge-architecture]] の4相パイプライン（Ingest → Compile → Query → Lint）において、Query フェーズは回答を合成するだけでなく、**Wiki の知識ギャップを検出する観測点**でもある。
+[[wiki-knowledge-architecture]] ([↗](wiki-knowledge-architecture.md)) の4相パイプライン（Ingest → Compile → Query → Lint）において、Query フェーズは回答を合成するだけでなく、**Wiki の知識ギャップを検出する観測点**でもある。
 
 従来の wiki-query は `log.md` に1行ログ、`outputs/queries/` にマークダウン回答を保存していたが、機械的に集計可能な構造化データがなかった。QueryLog はこのギャップを埋め、query 実行のたびに以下を記録する:
 
@@ -75,11 +75,11 @@ JSONL（JSON Lines）形式で `{wiki_root}/outputs/querylog.jsonl` に append-o
 QueryLog の核心的価値。query のたびに「Wiki にまだない知識」がトピック名として構造化・蓄積される。
 
 活用先:
-- **[[gap-detection]]**: 頻度集計で「最もよく聞かれるがまだ記事がないトピック」を自動検出
-- **Auto Ingest 提案**: [[gap-detection]] により高頻度ギャップに対して取り込むべきソースを提案
+- **[[gap-detection]] ([↗](gap-detection.md))**: 頻度集計で「最もよく聞かれるがまだ記事がないトピック」を自動検出
+- **Auto Ingest 提案**: [[gap-detection]] ([↗](gap-detection.md)) により高頻度ギャップに対して取り込むべきソースを提案
 - **成長方向の可視化**: どの領域の知識が不足しているかをデータで把握
 
-これは [[llm-wiki-knowledge-base]] の「Query も知識ベースに複利的に蓄積される」思想を、メタデータレベルで実現するもの。
+これは [[llm-wiki-knowledge-base]] ([↗](llm-wiki-knowledge-base.md)) の「Query も知識ベースに複利的に蓄積される」思想を、メタデータレベルで実現するもの。
 
 ## querylog-stats.py
 
@@ -95,19 +95,19 @@ python3 querylog-stats.py --wiki-root .wiki
 
 ## Phase 2+ での位置づけ
 
-QueryLog は [[wiki-knowledge-architecture]] の Output 層に属し、Phase 2+ 全機能の基盤:
+QueryLog は [[wiki-knowledge-architecture]] ([↗](wiki-knowledge-architecture.md)) の Output 層に属し、Phase 2+ 全機能の基盤:
 
 ```
 QueryLog (P0) → [[trust-score]] (P1) → [[gap-detection]] + Auto Ingest (P2)
 ```
 
-- **[[trust-score]]**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
-- **[[gap-detection]]**: gap_topics の頻度集計で知識ギャップを構造化
-- **Auto Ingest 提案**: [[gap-detection]] により高頻度ギャップに対するソース候補を自動生成
+- **[[trust-score]] ([↗](trust-score.md))**: 参照頻度（sources_consulted/cited の出現回数）を記事ごとの信頼度に変換
+- **[[gap-detection]] ([↗](gap-detection.md))**: gap_topics の頻度集計で知識ギャップを構造化
+- **Auto Ingest 提案**: [[gap-detection]] ([↗](gap-detection.md)) により高頻度ギャップに対するソース候補を自動生成
 
 ## 関連
 
-`sources_cited` を共引用シグナルとして missing edge 検出に活用する将来案は [[graphify-knowledge-graph-concepts]] を参照。
+`sources_cited` を共引用シグナルとして missing edge 検出に活用する将来案は [[graphify-knowledge-graph-concepts]] ([↗](graphify-knowledge-graph-concepts.md)) を参照。
 
 ## 出典
 

@@ -55,9 +55,9 @@ Wiki は Markdown ファイルの git リポジトリそのもの。バージョ
 
 ## 関連
 
-- [[wiki-knowledge-architecture]] — Wiki 全体の 3 層アーキテクチャ
-- [[llm-wiki-knowledge-base]] — LLM Wiki Knowledge Base のコンセプト
-- [[llm-wiki-use-cases]] — ツーリングが活きる典型ユースケース
+- [[wiki-knowledge-architecture]] ([↗](wiki-knowledge-architecture.md)) — Wiki 全体の 3 層アーキテクチャ
+- [[llm-wiki-knowledge-base]] ([↗](llm-wiki-knowledge-base.md)) — LLM Wiki Knowledge Base のコンセプト
+- [[llm-wiki-use-cases]] ([↗](llm-wiki-use-cases.md)) — ツーリングが活きる典型ユースケース
 
 ## 出典
 

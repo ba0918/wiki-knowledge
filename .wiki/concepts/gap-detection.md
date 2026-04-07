@@ -17,11 +17,11 @@ related:
 
 # Gap Detection
 
-Gap Detection は、[[querylog]] に蓄積されたクエリデータを分析し、Wiki にまだ存在しない知識のギャップを自動検出する機能である。検出されたギャップに対して優先度付きの Ingest 提案（Auto Ingest 提案）を生成する。Phase 2b+2c として実装された。
+Gap Detection は、[[querylog]] ([↗](querylog.md)) に蓄積されたクエリデータを分析し、Wiki にまだ存在しない知識のギャップを自動検出する機能である。検出されたギャップに対して優先度付きの Ingest 提案（Auto Ingest 提案）を生成する。Phase 2b+2c として実装された。
 
 ## 目的と背景
 
-[[llm-wiki-knowledge-base]] では、ユーザーのクエリに対して既存記事から回答を合成する。しかし Wiki の知識範囲には限界があり、回答できないトピック（ギャップ）が発生する。[[querylog]] の `gap_noted` フラグと `gap_topics` フィールドは、query 実行時にこれらのギャップを構造化データとして記録する。
+[[llm-wiki-knowledge-base]] ([↗](llm-wiki-knowledge-base.md)) では、ユーザーのクエリに対して既存記事から回答を合成する。しかし Wiki の知識範囲には限界があり、回答できないトピック（ギャップ）が発生する。[[querylog]] ([↗](querylog.md)) の `gap_noted` フラグと `gap_topics` フィールドは、query 実行時にこれらのギャップを構造化データとして記録する。
 
 Gap Detection はこのデータを集約・分析し、「最も頻繁にギャップとして検出されているトピック」を可視化する。Wiki の自律的な成長エンジンとしての役割を担う。
 
@@ -59,16 +59,16 @@ gap_topics に記録されたトピックが、実際に既存記事でカバー
 
 ## データ型
 
-全データ型は `frozen=True` で不変性を保証し、リストフィールドは `tuple` を使用する。[[trust-score]] と同じ immutability 方針。
+全データ型は `frozen=True` で不変性を保証し、リストフィールドは `tuple` を使用する。[[trust-score]] ([↗](trust-score.md)) と同じ immutability 方針。
 
 - **ConfirmedGap**: topic, frequency, coverage, related_articles
 - **IngestProposal**: topic, priority, suggested_queries, related_articles
 
 ## 実装構造
 
-コアロジックは全て純粋関数で実装されている。[[trust-score]] と同じく、I/O は `load_articles()` と CLI エントリポイント `main()` に隔離。
+コアロジックは全て純粋関数で実装されている。[[trust-score]] ([↗](trust-score.md)) と同じく、I/O は `load_articles()` と CLI エントリポイント `main()` に隔離。
 
-既存の `load_querylog()`（querylog_stats.py）と `parse_frontmatter()`（lint-wiki.py）をインポートして再利用する。ハイフン付きファイル名のインポートは [[trust-score]] と同じ `importlib` パターン。
+既存の `load_querylog()`（querylog_stats.py）と `parse_frontmatter()`（lint-wiki.py）をインポートして再利用する。ハイフン付きファイル名のインポートは [[trust-score]] ([↗](trust-score.md)) と同じ `importlib` パターン。
 
 ### CLI
 
@@ -76,22 +76,22 @@ gap_topics に記録されたトピックが、実際に既存記事でカバー
 python3 gap_detect.py --wiki-root .wiki [--format table|json|report] [--threshold 0.8]
 ```
 
-3フォーマット出力（table / json / report）は [[trust-score]] と同パターン。report 形式では `{wiki_root}/outputs/reports/{YYYYMMDD}-gap-detect.md` に出力する。
+3フォーマット出力（table / json / report）は [[trust-score]] ([↗](trust-score.md)) と同パターン。report 形式では `{wiki_root}/outputs/reports/{YYYYMMDD}-gap-detect.md` に出力する。
 
 ## lint ワークフロー統合
 
-[[wiki-knowledge-architecture]] の Lint フェーズに統合され、[[trust-score]] チェックの後に実行される。Priority が 0.7 以上の提案は lint レポートの 🔵 Info として記載される。
+[[wiki-knowledge-architecture]] ([↗](wiki-knowledge-architecture.md)) の Lint フェーズに統合され、[[trust-score]] ([↗](trust-score.md)) チェックの後に実行される。Priority が 0.7 以上の提案は lint レポートの 🔵 Info として記載される。
 
 ## Phase 2+ での位置づけ
 
-[[querylog]]・[[trust-score]] と連携して Wiki の自律的成長サイクルを構成する:
+[[querylog]] ([↗](querylog.md))・[[trust-score]] ([↗](trust-score.md)) と連携して Wiki の自律的成長サイクルを構成する:
 
 ```
 QueryLog (P0) → Trust Score (P1) → Gap Detection + Auto Ingest (P2)
 ```
 
-- **[[querylog]]**: クエリデータを蓄積（gap_topics が Gap Detection の入力データ）
-- **[[trust-score]]**: 記事品質を評価（低スコア記事の改善優先度を把握）
+- **[[querylog]] ([↗](querylog.md))**: クエリデータを蓄積（gap_topics が Gap Detection の入力データ）
+- **[[trust-score]] ([↗](trust-score.md))**: 記事品質を評価（低スコア記事の改善優先度を把握）
 - **Gap Detection**: ギャップを検出し成長方向を提案（ingest → compile で記事追加）
 
 ## テスト
@@ -100,7 +100,7 @@ QueryLog (P0) → Trust Score (P1) → Gap Detection + Auto Ingest (P2)
 
 ## 関連
 
-Leiden クラスタリングや共引用ベースの missing edge 検出による将来的な強化案は [[graphify-knowledge-graph-concepts]] を参照。
+Leiden クラスタリングや共引用ベースの missing edge 検出による将来的な強化案は [[graphify-knowledge-graph-concepts]] ([↗](graphify-knowledge-graph-concepts.md)) を参照。
 
 ## 出典
 

@@ -19,7 +19,7 @@ related:
 
 ## 背景
 
-[[wikilink-github-interop]] で示した通り、`[[slug]]` 形式は GitHub の通常レンダラでは解釈されない。一方、執筆時には [[wikilink-reader-comparison]] で挙げたエディタのオートコンプリートとバックリンクが手放せない。この乖離を埋める戦略を整理する。
+[[wikilink-github-interop]] ([↗](wikilink-github-interop.md)) で示した通り、`[[slug]]` 形式は GitHub の通常レンダラでは解釈されない。一方、執筆時には [[wikilink-reader-comparison]] ([↗](wikilink-reader-comparison.md)) で挙げたエディタのオートコンプリートとバックリンクが手放せない。この乖離を埋める戦略を整理する。
 
 ## 4 つの基本戦略
 
@@ -43,7 +43,7 @@ Git pre-commit フックで `[[slug]]` を `[Title](slug.md)` に書き換えて
 
 - **利点**: ファイルは書き換えない。lint で wikilink ↔ related の整合をチェックしやすい。
 - **欠点**: 冗長。書き手の規律が必要（lint で半自動化可能）。
-- **本プロジェクトの採用方式**: [[wikilink-link-parser-spec]] が抽出した本文 wikilink を `frontmatter.related` と突き合わせる lint チェックがこれを支える。
+- **本プロジェクトの採用方式**: [[wikilink-link-parser-spec]] ([↗](wikilink-link-parser-spec.md)) が抽出した本文 wikilink を `frontmatter.related` と突き合わせる lint チェックがこれを支える。
 
 ### 4. ビルド時生成（site generator 型）
 
@@ -68,7 +68,7 @@ pandoc --from=markdown+wikilinks_title_after_pipe input.md -o output.html
 
 ### sed / Lua filter（簡易）
 
-`sed -E 's/\[\[([a-z0-9-]+)\]\]/[\1](\1.md)/g'` のような one-liner も使えるが、**コードブロック内の `[[…]]` を除外できない**。Pandoc Lua filter を書けばこの制約を回避可能。本プロジェクトの lint パーサもこの問題を意識し、フェンス除外を実装している（[[wikilink-link-parser-spec]] 参照）。
+`sed -E 's/\[\[([a-z0-9-]+)\]\]/[\1](\1.md)/g'` のような one-liner も使えるが、**コードブロック内の `[[…]]` を除外できない**。Pandoc Lua filter を書けばこの制約を回避可能。本プロジェクトの lint パーサもこの問題を意識し、フェンス除外を実装している（[[wikilink-link-parser-spec]] ([↗](wikilink-link-parser-spec.md)) 参照）。
 
 ## 本プロジェクトの推奨パターン
 
@@ -81,9 +81,9 @@ pandoc --from=markdown+wikilinks_title_after_pipe input.md -o output.html
 
 ## 関連
 
-- [[wikilink-github-interop]] — なぜ変換が必要か（GitHub 上での扱い）
-- [[wikilink-reader-comparison]] — 変換先/元となるリーダー実装の差異
-- [[wikilink-link-parser-spec]] — 本プロジェクト lint の抽出仕様
+- [[wikilink-github-interop]] ([↗](wikilink-github-interop.md)) — なぜ変換が必要か（GitHub 上での扱い）
+- [[wikilink-reader-comparison]] ([↗](wikilink-reader-comparison.md)) — 変換先/元となるリーダー実装の差異
+- [[wikilink-link-parser-spec]] ([↗](wikilink-link-parser-spec.md)) — 本プロジェクト lint の抽出仕様
 
 ## 出典
 

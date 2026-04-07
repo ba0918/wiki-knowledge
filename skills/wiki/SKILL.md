@@ -223,6 +223,7 @@ Wiki ルート: {wiki_root}/
 1. `{wiki_root}/index.md` に新記事を追加（カテゴリ別、1行サマリー）
 2. `CLAUDE.md` の Articles セクションを更新
 3. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] compile | {Title} ({word_count} words, {N} sources)`
+4. **wikilink rendering**: `python3 skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/` を実行し、`[[slug]]` を GitHub Web UI で踏める `[[slug]] ([↗](slug.md))` 形式に併記する（idempotent）
 
 ### 完了メッセージ
 

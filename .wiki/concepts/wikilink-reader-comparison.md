@@ -65,13 +65,13 @@ related:
 3. **ブロック参照**: Obsidian の `^block-id` は他ツールでほぼ通用しない。
 4. **transclusion**: `![[note]]` は Foam/Dendron でサポート、Obsidian コアでは限定的（プラグイン依存）。
 
-本プロジェクトの [[wikilink-link-parser-spec]] は `[a-z0-9-]+` の slug のみを受理する保守的な方針で、これら 4 ツールすべての最小公倍数互換を狙っている。GitHub 上での見え方は [[wikilink-github-interop]] を参照。
+本プロジェクトの [[wikilink-link-parser-spec]] ([↗](wikilink-link-parser-spec.md)) は `[a-z0-9-]+` の slug のみを受理する保守的な方針で、これら 4 ツールすべての最小公倍数互換を狙っている。GitHub 上での見え方は [[wikilink-github-interop]] ([↗](wikilink-github-interop.md)) を参照。
 
 ## 関連
 
-- [[wikilink-github-interop]] — GitHub 上での wikilink の扱い
-- [[wikilink-conversion-strategies]] — リーダー間/出力先での変換戦略
-- [[wikilink-link-parser-spec]] — 本プロジェクトの抽出パーサ仕様
+- [[wikilink-github-interop]] ([↗](wikilink-github-interop.md)) — GitHub 上での wikilink の扱い
+- [[wikilink-conversion-strategies]] ([↗](wikilink-conversion-strategies.md)) — リーダー間/出力先での変換戦略
+- [[wikilink-link-parser-spec]] ([↗](wikilink-link-parser-spec.md)) — 本プロジェクトの抽出パーサ仕様
 
 ## 出典
 
