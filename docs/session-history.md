@@ -1,5 +1,16 @@
 # Session History
 
+## 2026-04-08 — wikilink GitHub 追跡性改善
+
+| Field | Value |
+|-------|-------|
+| **Cycle ID** | `20260408005842` |
+| **Feature** | wikilink GitHub 追跡性改善 — 自動併記スクリプトと lint チェック |
+| **Started** | 2026-04-08 00:58:42 |
+| **Phase** | 🟢 Complete |
+| **Plan** | [docs/plans/20260408005842_wikilink-github-rendering.md](./plans/20260408005842_wikilink-github-rendering.md) |
+| **Result** | [docs/plans/results/20260408005842_wikilink-github-rendering_result.md](./plans/results/20260408005842_wikilink-github-rendering_result.md) |
+
 ## 2026-04-07 — Wiki Docs Graph Layer Sync
 
 | Field | Value |
