@@ -1,30 +1,51 @@
 # Lint Procedure
 
-lint-wiki.py の自動チェックと LLM 駆動チェックの詳細手順。
+lint-wiki.py の自動チェック・Trust Score / Gap Detection 補助・LLM 駆動チェックの詳細手順。
 
 ## 自動チェック（lint-wiki.py）
+
+`lint-wiki.py` は **8 種類** のチェックを実行する。`dead_link` / `orphan` は graph layer
+（`outputs/graph.json`）経由で検出する。それ以外は inventory（`concepts/*.md` の in-memory パース結果）
+から直接検出する。
+
+### graph layer 経由の検出（デフォルト）
+
+`lint-wiki.py` はデフォルトで `--use-graph` ON で動作する。`outputs/graph.json` を読み:
+
+- **dead_link**: `metadata.dangling_links[]` の `{source, target}` を Finding 化
+- **orphan**: `edges[]` から各ノードの inbound 次数を集計し、0 のノードを Finding 化
+
+### graph 欠如時の挙動
+
+- **デフォルト**: `outputs/graph.json` が無い場合 `GraphNotFoundError` を送出し、CLI は **exit 2** で終了する。エラーメッセージは `graph_gen.py` の実行コマンドを案内する。これにより層越境（lint が graph を勝手に生成する）を防ぐ。
+- **`--auto-graph` opt-in**: ユーザが明示的に `--auto-graph` フラグを渡した場合に限り、CLI レイヤが `graph_gen.py` を subprocess で呼び出してから lint を再実行する。デフォルト OFF。`lint()` 関数は pure を維持する（フォールバックは CLI 層のみで完結）。
+- **`--no-graph`**: legacy パス。inventory から直接 `dead_link` / `orphan` を再計算する。
+
+### 検出項目一覧（全 8 項目）
 
 スクリプトが検出する項目:
 
 | チェック | Severity | 検出方法 |
 |---------|----------|---------|
-| Dead link | 🔴 Error | `[[slug]]` の参照先が `concepts/` に存在しない |
-| Missing source | 🔴 Error | `source_refs` のパスが `raw/` に存在しない |
-| Slug naming | 🔴 Error | ファイル名が `^[a-z0-9]+(-[a-z0-9]+)*$` に非準拠 |
-| Type invalid | 🔴 Error | `type` が `wiki` でない |
-| Source refs empty | 🔴 Error | `source_refs` が空配列（minItems: 1 違反） |
-| Orphan | 🟡 Warning | 他の記事から `[[wikilink]]` も `related` も参照されていない |
-| Missing frontmatter | 🟡 Warning | 必須フィールドが欠損 |
-| One-way link | 🟡 Warning | A→B の wikilink はあるが B→A の wikilink も related もない |
-| Related mismatch | 🟡 Warning | `related` FM にあるが本文 `[[wikilink]]` にない、またはその逆 |
-| Short article | 🟡 Warning | 本文（FM除く）が 50 words 未満 |
-| Speculation heavy | 🟡 Warning | `> [推測]` ブロックが本文行数の 30% 超 |
-| Schema violation | 🟡 Warning | `page-template.json` の required/type/const/additionalProperties 違反 |
-| Invalid category | 🟡 Warning | `categories.json` に存在しない category 値 |
-| Date format | 🟡 Warning | `created`/`updated` が YYYY-MM-DD 形式でない |
-| Tags format | 🟡 Warning | tags 要素が `^[a-z0-9-]+$` に非準拠 |
-| Related type | 🟡 Warning | `related` が配列でない、または要素が string でない |
-| Coverage gap | 🔵 Info | `[[slug]]` が2回以上参照されているが記事が存在しない |
+| dead_link | 🔴 Error | graph layer 経由: `outputs/graph.json` の `metadata.dangling_links[]` |
+| missing_source | 🔴 Error | `source_refs` のパスが `raw/` に存在しない |
+| orphan | 🟡 Warning | graph layer 経由: `outputs/graph.json` の `edges[]` から inbound 0 を抽出 |
+| missing_frontmatter | 🟡 Warning | 必須フィールドが欠損 |
+| coverage_gap | 🔵 Info | `[[slug]]` が2回以上参照されているが記事が存在しない |
+| link_quality | 🟡 Warning | 一方向リンク（one_way_link）、`related` と本文 `[[wikilink]]` の不一致（related_mismatch） |
+| article_quality | 🟡 Warning | 短記事（50 words 未満）、`> [推測]` ブロックが本文行数の 30% 超 |
+| format_violations | 🔴/🟡 | slug 命名規則・`page-template.json` 準拠（type/const）・category/date/tags 形式・source_refs 空・related 型 |
+
+8 項目は `lint-wiki.py` の `lint()` 関数で以下の順に実行される: `dead_link → orphan → missing_source → missing_frontmatter → coverage_gap → link_quality → article_quality → format_violations`。
+
+## Trust Score / Gap Detection（補助スクリプト）
+
+`lint-wiki.py` の後段で以下の 2 スクリプトを実行することで、Wiki 全体の健全性をさらに評価できる。SKILL.md の lint 節と整合する。
+
+- **`trust_score.py`**: 4 要素（ソース数・鮮度・引用頻度・backlink 数）から記事ごとの信頼度を算出。0.3 未満を 🟡 Warning として lint レポートに統合する。
+- **`gap_detect.py`**: QueryLog の `gap_topics` を集計し、Priority ≥ 0.7 のギャップを 🔵 Info として lint レポートに統合する。QueryLog が空ならスキップ。
+
+詳細は `CLAUDE.md` の Trust Score / Gap Detection セクションを参照。
 
 ## LLM 駆動チェック（6項目）
 
