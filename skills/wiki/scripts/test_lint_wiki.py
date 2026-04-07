@@ -793,3 +793,78 @@ class TestGraphConsumerMode:
         assert "baz" in orphans
         assert "foo" not in orphans
         assert "bar" not in orphans
+
+
+# ===========================================================================
+# --auto-graph CLI fallback (opt-in)
+# ===========================================================================
+
+class TestAutoGraphFallback:
+    """Verify that --auto-graph triggers graph_gen subprocess on missing graph,
+    and that default behaviour (no flag) continues to exit 2.
+
+    These tests exercise main(argv=...) — the CLI entry point — directly.
+    """
+
+    def _fm(self, slug: str, body: str) -> str:
+        return textwrap.dedent(f"""\
+            ---
+            title: {slug}
+            type: wiki
+            source_refs:
+              - "raw/articles/{slug}.md"
+            created: 2026-01-01
+            updated: 2026-01-01
+            category: concepts
+            tags: [test]
+            ---
+
+            # {slug}
+
+            {body}
+            """)
+
+    def _wiki(self, tmp_path):
+        return _make_wiki(
+            tmp_path,
+            {
+                "foo": self._fm("foo", "Links [[bar]]."),
+                "bar": self._fm("bar", "Back to [[foo]]."),
+            },
+            raw_files=["raw/articles/foo.md", "raw/articles/bar.md"],
+        )
+
+    def test_missing_graph_without_auto_graph_exits_2(self, tmp_path, capsys):
+        wiki_root = self._wiki(tmp_path)
+        with pytest.raises(SystemExit) as excinfo:
+            _mod.main(["--wiki-root", str(wiki_root)])
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert "graph.json" in err
+        assert "graph_gen.py" in err
+
+    def test_missing_graph_with_auto_graph_runs_graph_gen(self, tmp_path):
+        wiki_root = self._wiki(tmp_path)
+        graph_path = wiki_root / "outputs" / "graph.json"
+        assert not graph_path.exists()
+        with pytest.raises(SystemExit) as excinfo:
+            _mod.main(["--wiki-root", str(wiki_root), "--auto-graph"])
+        # After fallback, lint should complete (exit 0 or 1, not 2)
+        assert excinfo.value.code in (0, 1)
+        assert graph_path.exists(), "graph_gen should have been invoked"
+
+    def test_existing_graph_with_auto_graph_does_not_regenerate(self, tmp_path):
+        wiki_root = self._wiki(tmp_path)
+        # Pre-generate graph and capture its mtime
+        from graph_gen import generate
+        generate(wiki_root, generated_at="2026-04-07T00:00:00Z")
+        graph_path = wiki_root / "outputs" / "graph.json"
+        before_mtime = graph_path.stat().st_mtime
+        before_content = graph_path.read_text(encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            _mod.main(["--wiki-root", str(wiki_root), "--auto-graph"])
+
+        # graph.json should be untouched (auto-graph only triggers on missing)
+        assert graph_path.stat().st_mtime == before_mtime
+        assert graph_path.read_text(encoding="utf-8") == before_content

@@ -668,13 +668,45 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Legacy path: recompute dead-link/orphan from inventory only.",
     )
+    parser.add_argument(
+        "--auto-graph",
+        dest="auto_graph",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in fallback: if .wiki/outputs/graph.json is missing, "
+            "invoke graph_gen.py as a subprocess before retrying lint. "
+            "Default OFF (lint exits 2 on missing graph). Has no effect "
+            "when graph.json already exists."
+        ),
+    )
     return parser
 
 
-def main() -> None:
-    """CLI entry point."""
+def _run_graph_gen(wiki_root: Path) -> None:
+    """Invoke ``graph_gen.py`` as a subprocess for the ``--auto-graph`` fallback.
+
+    Kept as a thin wrapper so tests can monkeypatch if needed. The script
+    path is fixed (sibling file) — no user input is interpolated into the
+    command, preserving the security posture described in the plan.
+    """
+    import subprocess
+
+    script = Path(__file__).with_name("graph_gen.py")
+    subprocess.run(
+        [sys.executable, str(script), "--wiki-root", str(wiki_root)],
+        check=True,
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point.
+
+    ``argv`` is accepted for testability; when ``None`` the parser falls
+    back to ``sys.argv[1:]`` via argparse's default behaviour.
+    """
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Resolve wiki_root: --wiki-root takes priority, then positional
     wiki_root: Path | None = args.wiki_root or args.positional_root
@@ -688,14 +720,27 @@ def main() -> None:
     try:
         findings = lint(wiki_root, use_graph=args.use_graph)
     except GraphNotFoundError as exc:
-        print(
-            f"Error: graph.json not found at {exc}.\n"
-            f"Run: python {Path(__file__).with_name('graph_gen.py')} "
-            f"--wiki-root {wiki_root}\n"
-            "Or pass --no-graph to use the legacy inventory-only path.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+        if args.auto_graph:
+            # Opt-in fallback: regenerate graph and retry once.
+            try:
+                _run_graph_gen(wiki_root)
+            except Exception as gen_exc:  # pragma: no cover - defensive
+                print(
+                    f"Error: --auto-graph fallback failed to run graph_gen.py: {gen_exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            findings = lint(wiki_root, use_graph=args.use_graph)
+        else:
+            print(
+                f"Error: graph.json not found at {exc}.\n"
+                f"Run: python {Path(__file__).with_name('graph_gen.py')} "
+                f"--wiki-root {wiki_root}\n"
+                "Or pass --auto-graph to auto-generate, "
+                "or --no-graph for the legacy inventory-only path.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
     if args.fmt == "json":
         print(format_json(findings))
