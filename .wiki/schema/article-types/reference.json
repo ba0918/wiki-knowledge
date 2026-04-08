@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Article Type: reference",
+  "description": "Reference articles document stable factual content: API specifications, configuration schemas, protocol definitions, external standards. They are the most claim-dense article type — the Phase 3 compiler extracts structured claims aggressively from reference articles. Required body sections: Summary, Specification, Evidence Notes.",
+  "type": "object",
+  "required": ["article_type"],
+  "properties": {
+    "article_type": { "const": "reference" }
+  },
+  "x-body-sections": {
+    "required": ["Summary", "Specification", "Evidence Notes"],
+    "optional": ["Current Understanding", "History / Changes", "Open Questions"]
+  },
+  "x-recommended-relations": ["implements", "derived_from"]
+}

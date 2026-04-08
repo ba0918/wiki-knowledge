@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Article Type: runbook",
+  "description": "Runbook articles describe a repeatable operational procedure: prerequisites, steps, rollback, and success criteria. They are the most time-sensitive article type — the Phase 4 Validator lifecycle check flags runbooks older than 5 years as 'requires verification'. Required body sections: Summary, Prerequisites, Steps, Rollback, Success Criteria.",
+  "type": "object",
+  "required": ["article_type"],
+  "properties": {
+    "article_type": { "const": "runbook" }
+  },
+  "x-body-sections": {
+    "required": ["Summary", "Prerequisites", "Steps", "Rollback", "Success Criteria"],
+    "optional": ["History / Changes", "Evidence Notes", "Open Questions"]
+  },
+  "x-recommended-relations": ["implements", "depends_on"],
+  "x-lifecycle": {
+    "verification_interval_years": 5,
+    "description": "Runbooks older than 5 years are surfaced by validator/lifecycle as requiring re-verification."
+  }
+}

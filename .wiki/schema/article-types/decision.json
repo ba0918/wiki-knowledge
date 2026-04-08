@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Article Type: decision",
+  "description": "Decision articles record an explicit choice, its context, and the alternatives that were rejected. Required body sections: Summary, Current Understanding, History/Changes, Evidence Notes, Open Questions (common skeleton) plus a 'Decision' section listing the chosen option and rationale. Required knowledge_time.valid_from; valid_to may be null (still in force) or set when a superseding decision is recorded via relations.superseded_by.",
+  "type": "object",
+  "required": ["article_type", "knowledge_time"],
+  "properties": {
+    "article_type": { "const": "decision" },
+    "knowledge_time": {
+      "type": "object",
+      "required": ["valid_from"],
+      "properties": {
+        "valid_from": { "type": "string", "format": "date", "description": "The date the decision was made. Required." },
+        "valid_to": { "type": ["string", "null"], "format": "date" }
+      }
+    }
+  },
+  "x-body-sections": {
+    "required": ["Summary", "Current Understanding", "Decision", "Evidence Notes"],
+    "optional": ["History / Changes", "Open Questions"]
+  },
+  "x-recommended-relations": ["supersedes", "caused_by", "derived_from"]
+}

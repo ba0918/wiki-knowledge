@@ -1,12 +1,16 @@
 # Project Status
 
-**Last Updated:** 2026-04-08
+**Last Updated:** 2026-04-08 16:36:58
 
 ---
 
 ## 🎯 Current Session
 
-_No active session_
+| Cycle ID | Feature | Started | Phase | Plan |
+|----------|---------|---------|-------|------|
+| `20260408163658` | Source-Agnostic Knowledge Pipeline | 2026-04-08 16:36:58 | 🔵 Implementing | [plan](./plans/20260408163658_source-agnostic-knowledge-pipeline.md) |
+
+**Current Focus:** Phase 0 実装中（基礎工事：requirements.txt / Domain types / Service utilities / Migration 基盤 / v0→v1 既存 12 記事昇格）。実行環境は `.venv` に集約（uv pip install 運用）。
 
 ---
 

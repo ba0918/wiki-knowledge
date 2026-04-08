@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Article Type: concept",
+  "description": "Concept articles explain a domain idea, pattern, or mental model. They are the most free-form article type: only the common skeleton (Summary / Current Understanding / Evidence Notes) is required, and claims[] may be sparse or absent. Concept is also the fallback article_type used by the v0→v1 migration when the legacy category does not map cleanly onto decision/runbook/reference.",
+  "type": "object",
+  "required": ["article_type"],
+  "properties": {
+    "article_type": { "const": "concept" }
+  },
+  "x-body-sections": {
+    "required": ["Summary", "Current Understanding", "Evidence Notes"],
+    "optional": ["History / Changes", "Open Questions"]
+  },
+  "x-recommended-relations": ["related_to", "derived_from"],
+  "x-fallback-for-migration": true
+}

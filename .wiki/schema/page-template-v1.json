@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wiki Page Frontmatter (v1)",
+  "description": "v1 canonical schema for .wiki/concepts/*.md frontmatter. Enforced by lib/service/schema.py. Any divergence between this JSON schema and the frozen dataclass in lib/domain/types.py is a bug — both must be updated together. Legacy v0 articles (type: 'wiki', no schema_version) must be migrated via lib/service/migrations/v0_to_v1.py before they are loadable under this schema.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "article_id",
+    "article_type",
+    "title",
+    "captured_at",
+    "knowledge_time",
+    "status",
+    "sources",
+    "relations",
+    "claims",
+    "claim_refs",
+    "generated_by",
+    "extensions",
+    "tags"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Wiki schema version. v1 is the initial schema introduced by the Source-Agnostic Knowledge Pipeline (docs/plans/20260408163658)."
+    },
+    "article_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
+      "description": "Immutable article identity. Format YYYYMMDDHHMMSS-{slug}; on collision, append -2, -3, ... Allocated by lib/service/wiki_repo.py atomically."
+    },
+    "article_type": {
+      "type": "string",
+      "enum": ["decision", "runbook", "reference", "concept"],
+      "description": "View / required-field-set selector. Mutable — article_id is the only stable identity."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable article title (Japanese or English)."
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the article was captured into the wiki (YYYY-MM-DD). Stable across re-compiles; does not move with content edits."
+    },
+    "knowledge_time": {
+      "type": "object",
+      "required": ["valid_from", "valid_to"],
+      "additionalProperties": false,
+      "properties": {
+        "valid_from": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Start of validity period (ISO date). null means 'unknown start'."
+        },
+        "valid_to": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "End of validity period. null means 'still current, no known end'. Expired articles move to status=historical with relations.superseded_by set."
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["current", "historical", "disputed", "unverified"],
+      "description": "Single-source status model. No 'conflicted' (validator writes 'disputed'); no 'draft' (info-poor articles use 'unverified')."
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "ref", "source_version", "content_hash", "fetched_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Source-local identifier, referenced by claims[].source_refs." },
+          "type": { "type": "string", "description": "Source kind: slack_thread, file, url, ..." },
+          "ref": { "type": "string", "description": "Relative path inside .wiki/ (typically under .wiki/raw/)." },
+          "source_version": { "type": "integer", "minimum": 1, "description": "Monotonic version number; Fetcher increments on content change." },
+          "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "SHA-256 of the source content, prefixed with 'sha256:'." },
+          "fetched_at": { "type": "string", "format": "date-time", "description": "ISO8601 UTC timestamp when the source was fetched." },
+          "permalink": { "type": ["string", "null"], "description": "Optional human-accessible permalink." }
+        }
+      },
+      "description": "Upstream sources contributing evidence to this article. Must not be empty for compiled articles; empty sources is allowed only for stub articles (status=unverified)."
+    },
+    "relations": {
+      "type": "object",
+      "required": [
+        "supersedes",
+        "superseded_by",
+        "caused_by",
+        "derived_from",
+        "implements",
+        "depends_on",
+        "related_to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "supersedes": { "type": "array", "items": { "type": "string" } },
+        "superseded_by": { "type": ["string", "null"] },
+        "caused_by": { "type": "array", "items": { "type": "string" } },
+        "derived_from": { "type": "array", "items": { "type": "string" } },
+        "implements": { "type": "array", "items": { "type": "string" } },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "related_to": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim_id", "subject", "attribute", "period", "predicate", "source_refs"],
+        "additionalProperties": false,
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "description": "Deterministic: {article_id}#c-{sha256(canonical(subject, attribute, period, predicate))[:8]}"
+          },
+          "subject": { "type": "string" },
+          "attribute": { "type": "string" },
+          "period": {
+            "type": "object",
+            "required": ["valid_from", "valid_to"],
+            "additionalProperties": false,
+            "properties": {
+              "valid_from": { "type": ["string", "null"], "format": "date" },
+              "valid_to": { "type": ["string", "null"], "format": "date" }
+            }
+          },
+          "predicate": { "type": "string" },
+          "source_refs": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "description": "Atomic facts extracted from sources. Written by Phase 3 compiler (lib/domain/compiler/claim_extractor.py). Empty is allowed (Phase 0 stubs start empty)."
+    },
+    "claim_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "References to claims owned by other articles. Phase 3 writes these; Phase 4 validator uses them for cross-article consistency."
+    },
+    "generated_by": {
+      "type": "object",
+      "required": ["tool", "version", "generated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "type": "string", "description": "Name of the tool that wrote this representation: wiki-compile, wiki-migrate, wiki-repo-stub, ..." },
+        "version": { "type": "integer", "minimum": 1, "description": "Tool logic version; bump on breaking rendering changes." },
+        "generated_at": { "type": "string", "format": "date-time", "description": "ISO8601 UTC timestamp when this representation was generated." }
+      },
+      "description": "Audit-light provenance. Review audit trails live under extensions.review.audit — never under generated_by."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Namespaced extensions. Reserved namespaces: extensions.review.audit (written by review.py). Other namespaces are owned by their respective tools and must be strictly namespaced to avoid collisions.",
+      "properties": {
+        "review": {
+          "type": "object",
+          "properties": {
+            "audit": {
+              "type": "array",
+              "description": "Append-only review audit trail.",
+              "items": {
+                "type": "object",
+                "required": ["resolver", "resolved_at", "status_before", "status_after"],
+                "additionalProperties": false,
+                "properties": {
+                  "resolver": { "type": "string", "description": "User name or 'system'." },
+                  "resolved_at": { "type": "string", "format": "date-time" },
+                  "status_before": { "type": "string", "enum": ["current", "historical", "disputed", "unverified"] },
+                  "status_after": { "type": "string", "enum": ["current", "historical", "disputed", "unverified"] },
+                  "reason": { "type": "string" },
+                  "superseded_by_id": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Search-oriented tags. Lowercase, hyphen-separated convention; validated in lint-wiki."
+    }
+  }
+}
