@@ -11,15 +11,17 @@
 - [[trust-score]] — 記事ごとの信頼度を4要素（ソース数・鮮度・引用頻度・backlink数）で定量評価
 - [[gap-detection]] — QueryLog のギャップトピックを分析し、優先度付き Ingest 提案を自動生成
 - [[graphify-knowledge-graph-concepts]] — graphify から学ぶ知識グラフ構築の設計パターンと wiki-knowladge への適用判断
+- [[wikilink-github-interop]] — GitHub Web UI で wikilink がレンダリングされない問題と相互運用戦略
 
 ## tools
 
 - [[llm-wiki-tooling]] — Obsidian, qmd, Marp, Dataview 等の運用ツール群
+- [[wikilink-reader-comparison]] — Obsidian / Foam / Dendron / VS Code 拡張の wikilink 実装比較
 
 ## practices
 
-_まだ記事がありません_
+- [[wikilink-conversion-strategies]] — wikilink ↔ 標準 Markdown link の変換戦略と併記パターン
 
 ## references
 
-_まだ記事がありません_
+- [[wikilink-link-parser-spec]] — lint-wiki.py の wikilink パーサ仕様（抽出規則・除外規則）
