@@ -1,6 +1,6 @@
 # Project Status
 
-**Last Updated:** 2026-04-08 16:36:58
+**Last Updated:** 2026-07-03 23:10:00
 
 ---
 
@@ -8,9 +8,15 @@
 
 | Cycle ID | Feature | Started | Phase | Plan |
 |----------|---------|---------|-------|------|
-| `20260408163658` | Source-Agnostic Knowledge Pipeline | 2026-04-08 16:36:58 | 🔵 Implementing | [plan](./plans/20260408163658_source-agnostic-knowledge-pipeline.md) |
+| `20260703224551` | repo ingest MVP（5リポジトリ横断 Q&A wiki の入口） | 2026-07-03 22:45:51 | 🟢 Complete | [plan](./plans/20260703224551_repo-ingest-mvp.md) |
 
-**Current Focus:** Phase 0 実装中（基礎工事：requirements.txt / Domain types / Service utilities / Migration 基盤 / v0→v1 既存 12 記事昇格）。実行環境は `.venv` に集約（uv pip install 運用）。
+**Current Focus:** repo ingest MVP 完了（A: 手動 dogfooding ゲート通過 → B: compile 規範 → C: TDD 実装 486 tests → D: ripgrep+fd 横断 wikilink 機械検証）。次の候補: 仕事の5リポジトリへの実適用、raw slug 命名統一（plan の Phase D 摩擦リスト参照）、pipeline Phase 0 再開。
+
+## ⏸️ Paused
+
+| Cycle ID | Feature | Phase | Note |
+|----------|---------|-------|------|
+| `20260408163658` | Source-Agnostic Knowledge Pipeline | 🔵 Phase 0 途中（0.10 まで commit 済み） | migrate.py CLI + 12記事 v1 昇格（Phase 0.11-0.13）が未了。repo ingest MVP と型境界を共有（plan v2 参照） |
 
 ---
 
