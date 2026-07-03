@@ -27,9 +27,17 @@ Ingest → Compile → Query → Lint
 
 ## インストール
 
-```bash
-claude mcp add wiki -- /path/to/wiki-knowladge
+Claude Code プラグインとしてインストールする（MCP サーバではない）。
+
 ```
+# Claude Code 内で marketplace を登録（GitHub リポジトリ）
+/plugin marketplace add ba0918/wiki-knowladge
+
+# プラグインをインストール（plugin名@marketplace名）
+/plugin install wiki@wiki-knowladge
+```
+
+ローカルクローンから登録する場合は `/plugin marketplace add /path/to/wiki-knowladge`。
 
 ## 使い方
 
