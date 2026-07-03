@@ -32,6 +32,31 @@ tags: [tag1, tag2]               # 必須
 ---
 ```
 
+## Raw ソース — repo 由来（raw/files/{repo-slug}/*.md）
+
+repo ingest 経由で取り込むファイルは、上記に加えて以下を付与する:
+
+```yaml
+---
+title: "ripgrep GUIDE"
+source_url: "https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md"  # リモート URL（userinfo は除去済みであること）
+source_revision: "48b0c795f4feb37343b2832d991c5c6a3900c08a"  # 必須、取り込み時の HEAD commit hash
+source_path: "GUIDE.md"           # 必須、リポジトリ内相対パス
+scraped: 2026-07-03
+tags: [ripgrep, docs]
+---
+```
+
+**注意**: `source_version` という名前は使わない（source-agnostic pipeline の `Source.source_version: int`（monotonic カウンタ）と意味が衝突するため）。
+
+**pipeline v1 スキーマとの対応**（将来の migration 用マッピング表）:
+
+| raw フィールド | pipeline `Source` フィールド |
+|---------------|------------------------------|
+| `source_url` | `permalink` |
+| `source_revision` | `revision`（Phase 1 で `Source` に正式追加予定） |
+| `source_path` | `extensions["repo"]["source_path"]`（予約 namespace） |
+
 ## Query 出力（outputs/queries/*.md）
 
 ```yaml

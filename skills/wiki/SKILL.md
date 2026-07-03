@@ -123,10 +123,13 @@ Wiki ルート: {wiki_root}/
 入力タイプに応じて以下のフローで処理する:
 
 ```
-入力 → URL?          → WebFetch で取得       → article として保存
+入力 → git URL / git リポジトリパス? → repo フロー（下記「repo ソースの ingest」）
+     → URL?          → WebFetch で取得       → article として保存
      → ファイルパス? → Read で読み込み       → file として保存
      → テキスト直接? → そのまま使用          → article として保存
 ```
+
+git URL の判定: `https://…/owner/repo(.git)` / `ssh://…` / `git@host:owner/repo.git`、またはローカルパスで `.git` ディレクトリを含む場合。
 
 ### セキュリティチェック（必須）
 
@@ -177,6 +180,31 @@ Wiki ルート: {wiki_root}/
   tags: [{tags}]
 次のステップ: `wiki compile` で記事を生成、または `wiki cycle --compile-only` で compile + lint を一括実行
 ```
+
+### repo ソースの ingest
+
+git リポジトリ（URL またはローカルパス）を取り込む。**複数リポジトリは 3 段で処理する**（横断 wikilink は全リポジトリが出揃って初めて張れるため、段の順序を守る）:
+
+**段1 — 全リポジトリを clone + manifest 生成**（1コマンドで複数可）:
+
+```bash
+python3 scripts/repo_ingest.py <url-or-path>... --wiki-root {wiki_root}
+```
+
+- clone は自動: `ghq` があれば `ghq get --shallow`、なければ `git clone --depth 1` で `{wiki_root}/.cache/repos/` へ
+- manifest（構造メタ + docs 候補のティア分け）は `{wiki_root}/.cache/manifests/{slug}.json` に出力される。**全部読まず、必要な tier だけ Read する**
+- 機械生成の `repo-inventory.md`（ディレクトリ構成・言語統計・commit hash）が `raw/files/{slug}/` に保存される — これは決定論的なツール出力であり一次ソースとして扱う
+
+**段2 — 全リポジトリの docs 選定 + ingest**:
+
+1. manifest の tier1（README / architecture / adr）を基本とし、ユーザーと選定を確認（自動選定は tier1 のみ）
+2. 各ファイルを既存の file ingest フロー（セキュリティチェック込み）で `raw/files/{slug}/` に保存
+3. フロントマターに `source_url`（リモート URL、userinfo 除去済み）+ `source_revision`（commit hash）+ `source_path` を付与（[references/frontmatter-schemas.md](references/frontmatter-schemas.md) の repo 節参照）
+4. log.md に `## [YYYY-MM-DD] ingest | {slug} (repo @ {short-hash})` を追記
+
+**段3 — 一括 compile**:
+
+全リポジトリの ingest 完了後に compile する。手順・記事構成・段階的読解プロトコル・untrusted 取り扱いは [references/compilation-guide.md](references/compilation-guide.md) の「repo ソースの compile」節に従う。リポジトリ概要記事に加え、リポジトリ境界をまたぐ**横断フロー記事**を作成し相互に [[wikilink]] を張る。
 
 ---
 
