@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Wiki lint checker: dead links, orphans, missing sources, link quality,
-article quality, format violations.
+article quality, format violations, wikilink rendering, index sync.
 
 Usage:
     python lint-wiki.py --wiki-root .wiki [--format table|json|report]
@@ -133,6 +133,51 @@ def _check_wikilink_rendering(
                     f"suffix; run wikilink_render.py --write to fix"
                 ),
             ))
+    return findings
+
+
+def _check_index_sync(
+    inventory: dict[str, ArticleInventory], wiki_root: Path,
+) -> list[Finding]:
+    """Check: detect drift between ``index.md`` and ``concepts/``.
+
+    ``index.md`` is a hand-curated catalog, so it silently rots when
+    articles are added or removed. Two directions are checked:
+
+    - ``index_missing_entry`` — article exists but is not listed in index.md
+    - ``index_stale_entry``   — index.md lists a slug with no article
+
+    A missing ``index.md`` itself is reported as ``index_missing`` (info):
+    the file is part of the wiki-init scaffold, but its absence should not
+    fail lint for wikis that never adopted an index.
+    """
+    index_path = wiki_root / "index.md"
+    if not index_path.exists():
+        return [Finding(
+            severity="info",
+            check="index_missing",
+            slug="",
+            message=f"{index_path.name} not found; index sync check skipped",
+        )]
+
+    listed = set(find_wikilinks(index_path.read_text(encoding="utf-8")))
+    all_slugs = set(inventory.keys())
+
+    findings: list[Finding] = []
+    for slug in sorted(all_slugs - listed):
+        findings.append(Finding(
+            severity="warning",
+            check="index_missing_entry",
+            slug=slug,
+            message=f"{slug} exists in concepts/ but is not listed in index.md",
+        ))
+    for slug in sorted(listed - all_slugs):
+        findings.append(Finding(
+            severity="warning",
+            check="index_stale_entry",
+            slug=slug,
+            message=f"index.md lists [[{slug}]] but concepts/{slug}.md does not exist",
+        ))
     return findings
 
 
@@ -649,6 +694,7 @@ def lint(wiki_root: Path, *, use_graph: bool = False) -> list[Finding]:
     findings.extend(_check_article_quality(inventory))
     findings.extend(_check_format(inventory, wiki_root, schema, categories))
     findings.extend(_check_wikilink_rendering(inventory))
+    findings.extend(_check_index_sync(inventory, wiki_root))
 
     return findings
 

@@ -322,7 +322,7 @@ Wiki の品質をチェックし、修復を提案する。
 
 ### 自動チェック（lint-wiki.py）
 
-`scripts/lint-wiki.py` は **8 項目** を検出する。`dead_link` / `orphan` は graph layer
+`scripts/lint-wiki.py` は **10 項目** を検出する。`dead_link` / `orphan` は graph layer
 （`{wiki_root}/outputs/graph.json`）経由で算出するため、**実行前に `graph_gen.py` で graph を生成しておく必要がある**。
 
 ```bash
@@ -335,7 +335,7 @@ python3 scripts/lint-wiki.py --wiki-root {wiki_root}
 
 `--auto-graph`（opt-in）を指定すると、graph 欠如時に lint 側が `graph_gen.py` を自動で呼び出してフォールバックする。デフォルト OFF。`--no-graph` を指定すると inventory から直接再計算する legacy パスに切り替わる。
 
-検出 8 項目:
+検出 10 項目:
 - **dead_link** 🔴 — `[[slug]]` の参照先に `concepts/{slug}.md` が存在しない（graph 経由）
 - **orphan** 🟡 — どの記事からも参照されていない記事（graph 経由）
 - **missing_source** 🔴 — `source_refs` のファイルが存在しない
@@ -344,6 +344,8 @@ python3 scripts/lint-wiki.py --wiki-root {wiki_root}
 - **link_quality** 🟡 — 一方向リンク、`related` と本文 wikilink の不一致
 - **article_quality** 🟡 — 50 words 未満の短記事、推測ブロック 30% 超
 - **format_violations** 🔴/🟡 — slug 命名・schema・category/type/date/tags 検証
+- **wikilink_rendering** 🟡 — `[[slug]]` に GitHub Web UI 用併記 `([↗](slug.md))` が付いていない（`wikilink_render.py --write` で修正）
+- **index_sync** 🟡 — `index.md` と `concepts/` の乖離（未掲載記事 = index_missing_entry、存在しない記事の掲載 = index_stale_entry。`index.md` 自体の不在は 🔵 index_missing）
 
 ### Trust Score チェック（trust_score.py）
 

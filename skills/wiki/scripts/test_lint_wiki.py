@@ -47,6 +47,7 @@ _check_link_quality = _mod._check_link_quality
 _check_article_quality = _mod._check_article_quality
 _check_format = _mod._check_format
 _check_wikilink_rendering = _mod._check_wikilink_rendering
+_check_index_sync = _mod._check_index_sync
 format_table = _mod.format_table
 format_json = _mod.format_json
 format_report = _mod.format_report
@@ -912,3 +913,105 @@ class TestCheckWikilinkRendering:
     def test_no_wikilinks_no_finding(self):
         art = self._make("a", "plain text")
         assert _check_wikilink_rendering({"a": art}) == []
+
+
+# ===========================================================================
+# index_sync check (index.md ↔ concepts/ catalog drift)
+# ===========================================================================
+
+class TestCheckIndexSync:
+    def _wiki(self, tmp_path, articles: dict[str, str],
+              index_content: str | None) -> Path:
+        wiki_root = _make_wiki_basic(tmp_path, articles)
+        if index_content is not None:
+            (wiki_root / "index.md").write_text(index_content, encoding="utf-8")
+        return wiki_root
+
+    def test_all_articles_listed_no_findings(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"alpha": VALID_FM, "beta": VALID_FM},
+            "# Wiki Index\n\n- [[alpha]] — a\n- [[beta]] — b\n",
+        )
+        inv = _build_inventory(wiki_root)
+        assert _check_index_sync(inv, wiki_root) == []
+
+    def test_article_missing_from_index_warns(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"alpha": VALID_FM, "beta": VALID_FM},
+            "# Wiki Index\n\n- [[alpha]] — a\n",
+        )
+        inv = _build_inventory(wiki_root)
+        findings = _check_index_sync(inv, wiki_root)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check == "index_missing_entry"
+        assert f.severity == "warning"
+        assert f.slug == "beta"
+
+    def test_stale_index_entry_warns(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"alpha": VALID_FM},
+            "# Wiki Index\n\n- [[alpha]] — a\n- [[ghost]] — deleted\n",
+        )
+        inv = _build_inventory(wiki_root)
+        findings = _check_index_sync(inv, wiki_root)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check == "index_stale_entry"
+        assert f.severity == "warning"
+        assert f.slug == "ghost"
+
+    def test_missing_index_md_is_info(self, tmp_path):
+        wiki_root = self._wiki(tmp_path, {"alpha": VALID_FM}, None)
+        inv = _build_inventory(wiki_root)
+        findings = _check_index_sync(inv, wiki_root)
+        assert len(findings) == 1
+        assert findings[0].check == "index_missing"
+        assert findings[0].severity == "info"
+
+    def test_rendered_wikilink_in_index_counts(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"alpha": VALID_FM},
+            "# Wiki Index\n\n- [[alpha]] ([↗](concepts/alpha.md)) — a\n",
+        )
+        inv = _build_inventory(wiki_root)
+        assert _check_index_sync(inv, wiki_root) == []
+
+    def test_code_span_wikilink_in_index_ignored(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"alpha": VALID_FM},
+            "# Wiki Index\n\n- [[alpha]] — uses `[[wikilink]]` syntax\n",
+        )
+        inv = _build_inventory(wiki_root)
+        # `[[wikilink]]` inside a code span must not count as a stale entry.
+        assert _check_index_sync(inv, wiki_root) == []
+
+    def test_findings_sorted_by_slug(self, tmp_path):
+        wiki_root = self._wiki(
+            tmp_path,
+            {"zeta": VALID_FM, "alpha": VALID_FM},
+            "# Wiki Index\n",
+        )
+        inv = _build_inventory(wiki_root)
+        findings = _check_index_sync(inv, wiki_root)
+        assert [f.slug for f in findings] == ["alpha", "zeta"]
+
+    def test_lint_orchestrator_runs_index_sync(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {"alpha": VALID_FM, "other": VALID_FM},
+            schema=DEFAULT_SCHEMA,
+            categories=DEFAULT_CATEGORIES,
+            raw_files=["raw/articles/test.md"],
+        )
+        (wiki_root / "index.md").write_text(
+            "# Wiki Index\n\n- [[alpha]] — a\n", encoding="utf-8",
+        )
+        findings = lint(wiki_root, use_graph=False)
+        missing = [f for f in findings if f.check == "index_missing_entry"]
+        assert {f.slug for f in missing} == {"other"}
