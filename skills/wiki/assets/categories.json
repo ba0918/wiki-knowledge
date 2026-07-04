@@ -1,0 +1,22 @@
+[
+  {
+    "slug": "concepts",
+    "name": "概念",
+    "description": "技術概念、理論、パターン"
+  },
+  {
+    "slug": "tools",
+    "name": "ツール",
+    "description": "ソフトウェアツール、ライブラリ、フレームワーク"
+  },
+  {
+    "slug": "practices",
+    "name": "プラクティス",
+    "description": "ベストプラクティス、ワークフロー、手法"
+  },
+  {
+    "slug": "references",
+    "name": "リファレンス",
+    "description": "API仕様、設定リファレンス、チートシート"
+  }
+]
