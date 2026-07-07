@@ -206,6 +206,8 @@ def _source_to_mapping(s: Source) -> dict[str, Any]:
     }
     if s.permalink is not None:
         out["permalink"] = s.permalink
+    if s.revision is not None:
+        out["revision"] = s.revision
     return out
 
 
@@ -472,6 +474,7 @@ def _source_from_mapping(value: Any) -> Source:
         content_hash=str(m["content_hash"]),
         fetched_at=str(m["fetched_at"]),
         permalink=_optional_str(m.get("permalink"), "sources[].permalink"),
+        revision=_optional_str(m.get("revision"), "sources[].revision"),
     )
 
 

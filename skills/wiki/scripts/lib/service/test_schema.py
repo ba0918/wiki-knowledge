@@ -141,6 +141,30 @@ def test_dump_then_load_round_trips_equal() -> None:
     assert result.value == original
 
 
+def test_source_revision_round_trips() -> None:
+    from dataclasses import replace
+
+    original = _sample_article()
+    pinned = replace(
+        original.sources[0],
+        revision="48b0c795f4feb37343b2832d991c5c6a3900c08a",
+    )
+    article = replace(original, sources=(pinned,) + original.sources[1:])
+    result = load_article(dump_article(article))
+    assert isinstance(result, Ok)
+    assert result.value.sources[0].revision == (
+        "48b0c795f4feb37343b2832d991c5c6a3900c08a"
+    )
+    assert result.value == article
+
+
+def test_source_revision_omitted_from_dump_when_none() -> None:
+    # None revision must not appear in the YAML at all (round-trip parity
+    # with the pre-revision dump format).
+    text = dump_article(_sample_article())
+    assert "revision" not in text
+
+
 def test_dump_then_load_preserves_empty_collections() -> None:
     empty = Article(
         schema_version=1,

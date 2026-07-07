@@ -80,7 +80,8 @@
           "source_version": { "type": "integer", "minimum": 1, "description": "Monotonic version number; Fetcher increments on content change." },
           "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "SHA-256 of the source content, prefixed with 'sha256:'." },
           "fetched_at": { "type": "string", "format": "date-time", "description": "ISO8601 UTC timestamp when the source was fetched." },
-          "permalink": { "type": ["string", "null"], "description": "Optional human-accessible permalink." }
+          "permalink": { "type": ["string", "null"], "description": "Optional human-accessible permalink." },
+          "revision": { "type": ["string", "null"], "description": "VCS revision (e.g. git commit hash) the source content was captured at. Populated by repo-aware fetchers; maps from raw frontmatter 'source_revision' (references/frontmatter-schemas.md). Null/absent for non-VCS sources." }
         }
       },
       "description": "Upstream sources contributing evidence to this article. Must not be empty for compiled articles; empty sources is allowed only for stub articles (status=unverified)."

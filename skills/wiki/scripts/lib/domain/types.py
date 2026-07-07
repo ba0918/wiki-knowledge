@@ -77,6 +77,11 @@ class Source:
     algorithm is self-describing). ``source_version`` is monotonic and
     Fetcher-managed; it increments each time the same logical source is
     re-ingested with a different content hash.
+
+    ``revision`` pins the VCS revision (e.g. git commit hash) the source
+    content was captured at. Populated by repo-aware fetchers; maps from the
+    raw frontmatter field ``source_revision`` (see
+    ``references/frontmatter-schemas.md``). ``None`` for non-VCS sources.
     """
 
     id: str
@@ -86,6 +91,7 @@ class Source:
     content_hash: str  # "sha256:..." format
     fetched_at: str  # ISO8601 UTC (Service layer injects)
     permalink: str | None = None
+    revision: str | None = None  # VCS revision (repo sources only)
 
 
 @dataclass(frozen=True)

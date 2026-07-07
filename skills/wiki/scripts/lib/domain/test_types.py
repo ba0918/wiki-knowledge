@@ -79,6 +79,16 @@ def test_source_equality_by_value() -> None:
     assert a == b  # frozen dataclass eq=True by default
 
 
+def test_source_revision_default_none() -> None:
+    s = _make_source()
+    assert s.revision is None
+
+
+def test_source_accepts_revision() -> None:
+    s = _make_source(revision="48b0c795f4feb37343b2832d991c5c6a3900c08a")
+    assert s.revision == "48b0c795f4feb37343b2832d991c5c6a3900c08a"
+
+
 # ---------------------------------------------------------------------------
 # GeneratedBy (strictly 3 fields — no audit, no extra)
 # ---------------------------------------------------------------------------

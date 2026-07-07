@@ -1015,3 +1015,73 @@ class TestCheckIndexSync:
         findings = lint(wiki_root, use_graph=False)
         missing = [f for f in findings if f.check == "index_missing_entry"]
         assert {f.slug for f in missing} == {"other"}
+
+
+# ===========================================================================
+# schema_version guard — v1 article mixed into the v0 wiki
+# (schema regime decision: docs/plans/20260707194819_schema-regime-decision.md)
+# ===========================================================================
+
+V1_ARTICLE_FM = textwrap.dedent("""\
+    ---
+    schema_version: 1
+    article_id: 20260707000000-v1-sample
+    article_type: concept
+    title: V1 Sample
+    captured_at: 2026-07-07
+    status: current
+    tags: [sample]
+    ---
+
+    # V1 Sample
+
+    Body compiled under the v1 schema regime.
+    """)
+
+
+class TestSchemaVersionGuard:
+    """A v1 article must yield exactly one actionable error, not a cascade
+    of v0-format violations."""
+
+    def test_v1_article_emits_single_unadopted_error(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {"v1-sample": V1_ARTICLE_FM},
+            schema=DEFAULT_SCHEMA,
+            categories=DEFAULT_CATEGORIES,
+        )
+        inv = _build_inventory(wiki_root)
+        findings = _check_format(inv, wiki_root, DEFAULT_SCHEMA, DEFAULT_CATEGORIES)
+        guard = [f for f in findings if f.check == "schema_version_unadopted"]
+        assert len(guard) == 1
+        assert guard[0].severity == "error"
+        assert guard[0].slug == "v1-sample"
+        assert "schema-regime-decision" in guard[0].message
+        # No v0-format cascade for the v1 article
+        others = [
+            f for f in findings
+            if f.slug == "v1-sample" and f.check != "schema_version_unadopted"
+        ]
+        assert others == []
+
+    def test_v1_article_skipped_by_missing_fm(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {"v1-sample": V1_ARTICLE_FM},
+            schema=DEFAULT_SCHEMA,
+            categories=DEFAULT_CATEGORIES,
+        )
+        inv = _build_inventory(wiki_root)
+        assert _check_missing_fm(inv) == []
+
+    def test_v0_articles_unaffected(self, tmp_path):
+        wiki_root = _make_wiki(
+            tmp_path,
+            {"alpha": VALID_FM},
+            schema=DEFAULT_SCHEMA,
+            categories=DEFAULT_CATEGORIES,
+            raw_files=["raw/articles/test.md"],
+        )
+        inv = _build_inventory(wiki_root)
+        findings = _check_format(inv, wiki_root, DEFAULT_SCHEMA, DEFAULT_CATEGORIES)
+        assert [f for f in findings if f.check == "schema_version_unadopted"] == []

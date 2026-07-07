@@ -2,7 +2,9 @@
 
 **Cycle ID:** `20260408163658`
 **Started:** 2026-04-08 16:36:58
-**Status:** 🟡 Planning (refined v2: 2026-04-08)
+**Status:** ⏸️ Paused — schema 体制の裁定により Phase 0.11-0.13（migrate.py CLI + 12記事 v1 昇格）は**採用トリガー発火時に実施**へ変更（2026-07-07）
+
+> **⚖️ 裁定注記（2026-07-07）**: v0 を schema-of-record と宣言し、本 plan の v1 スキーマ + migrations は「採用トリガー付き standby 資産」に再定義された。採用トリガー: 「concepts/ に raw/ から再導出できない状態を書き込む最初の機能（review resolve / claim 仲裁 / 出典なし promote）は v1 migration と同一サイクルでリリースする」。`Source.revision` は repo-ingest との整合のため先行して正式追加済み。詳細: [docs/plans/20260707194819_schema-regime-decision.md](20260707194819_schema-regime-decision.md)
 
 ---
 

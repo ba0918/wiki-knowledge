@@ -248,6 +248,10 @@ def _check_missing_fm(inventory: dict[str, ArticleInventory]) -> list[Finding]:
     findings: list[Finding] = []
     for slug, article in inventory.items():
         fm = article.frontmatter
+        if "schema_version" in fm:
+            # v1 article — reported once as schema_version_unadopted by
+            # _check_format; v0 required-field rules do not apply.
+            continue
         missing = [f for f in required_fields if f not in fm]
         if missing:
             findings.append(Finding(
@@ -404,6 +408,24 @@ def _check_format(
 
     for slug, article in inventory.items():
         fm = article.frontmatter
+
+        # v1 (schema_version) article mixed into the v0 wiki: emit a single
+        # actionable error instead of a cascade of v0-format violations.
+        # v0 is the schema-of-record until the adoption trigger fires
+        # (docs/plans/20260707194819_schema-regime-decision.md).
+        if "schema_version" in fm:
+            findings.append(Finding(
+                severity="error",
+                check="schema_version_unadopted",
+                slug=slug,
+                message=(
+                    f"{slug}: has schema_version={fm['schema_version']!r} but v0 is "
+                    "the schema-of-record — v1 is not adopted yet "
+                    "(see docs/plans/20260707194819_schema-regime-decision.md)"
+                ),
+                details={"schema_version": fm["schema_version"]},
+            ))
+            continue
 
         # Slug naming violation
         if not _SLUG_PATTERN.match(slug):
