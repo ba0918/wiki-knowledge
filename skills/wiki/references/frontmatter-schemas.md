@@ -49,13 +49,15 @@ tags: [ripgrep, docs]
 
 **注意**: `source_version` という名前は使わない（source-agnostic pipeline の `Source.source_version: int`（monotonic カウンタ）と意味が衝突するため）。
 
-**pipeline v1 スキーマとの対応**（将来の migration 用マッピング表）:
+**pipeline v1 スキーマとの対応**（将来の migration 用マッピング表・確定済み）:
 
 | raw フィールド | pipeline `Source` フィールド |
 |---------------|------------------------------|
 | `source_url` | `permalink` |
-| `source_revision` | `revision`（Phase 1 で `Source` に正式追加予定） |
+| `source_revision` | `revision`（確定 — `lib/domain/types.py` の `Source.revision` / `page-template-v1.json` に追加済み） |
 | `source_path` | `extensions["repo"]["source_path"]`（予約 namespace） |
+
+なお v1 スキーマ自体は未採用（v0 が schema-of-record）。裁定と採用トリガーは `docs/plans/20260707194819_schema-regime-decision.md` を参照。
 
 ## Query 出力（outputs/queries/*.md）
 
@@ -98,7 +100,7 @@ summary:
 | `id` | string | Yes | `q_{YYYYMMDDTHHMMSS}` 形式（タイムスタンプベース） |
 | `timestamp` | string | Yes | ISO 8601 タイムスタンプ |
 | `question` | string | Yes | ユーザの質問文（全文） |
-| `sources_consulted` | string[] | Yes | index スキャンで読み込んだ記事パス |
+| `sources_consulted` | string[] | Yes | retrieval 候補から選定して読み込んだ記事パス |
 | `sources_cited` | string[] | Yes | 回答テキストから `[[wikilink]]` を正規表現抽出して収集 |
 | `gap_noted` | boolean | Yes | 回答中に「Wiki にない情報」を指摘したか |
 | `gap_topics` | string[] | Yes | ギャップとして指摘したトピック（空配列可） |

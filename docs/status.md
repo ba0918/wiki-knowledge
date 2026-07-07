@@ -8,15 +8,17 @@
 
 | Cycle ID | Feature | Started | Phase | Plan |
 |----------|---------|---------|-------|------|
+| `20260707200608` | Query の derived layer 消費者化（query_retrieve + Trust Score v2） | 2026-07-07 20:06:08 | 🟢 Complete | [plan](./plans/20260707200608_query-derived-layer-consumer.md) |
+| `20260707194819` | Schema 体制の裁定（v0 = schema-of-record / v1 = standby） | 2026-07-07 19:48:19 | 🟢 Complete | [plan](./plans/20260707194819_schema-regime-decision.md) |
 | `20260703224551` | repo ingest MVP（5リポジトリ横断 Q&A wiki の入口） | 2026-07-03 22:45:51 | 🟢 Complete | [plan](./plans/20260703224551_repo-ingest-mvp.md) |
 
-**Current Focus:** repo ingest MVP 完了（A: 手動 dogfooding ゲート通過 → B: compile 規範 → C: TDD 実装 486 tests → D: ripgrep+fd 横断 wikilink 機械検証）。次の候補: 仕事の5リポジトリへの実適用、raw slug 命名統一（plan の Phase D 摩擦リスト参照）、pipeline Phase 0 再開。
+**Current Focus:** schema 体制裁定完了（v0 宣言 + 採用トリガー定義 + `Source.revision` 正式追加 + lint `schema_version_unadopted` ガード、493 tests）。**5リポジトリ実適用は v0 のまま進めてよい（公式にアンブロック）**。次の候補: 仕事の5リポジトリへの実適用、query の derived layer 消費者化（Pitch 2）、SKILL.md 決定論ロジックのスクリプト抽出（Pitch 3）、raw slug 命名統一。
 
 ## ⏸️ Paused
 
 | Cycle ID | Feature | Phase | Note |
 |----------|---------|-------|------|
-| `20260408163658` | Source-Agnostic Knowledge Pipeline | 🔵 Phase 0 途中（0.10 まで commit 済み） | migrate.py CLI + 12記事 v1 昇格（Phase 0.11-0.13）が未了。repo ingest MVP と型境界を共有（plan v2 参照） |
+| `20260408163658` | Source-Agnostic Knowledge Pipeline | ⏸️ 採用トリガー待ち | **裁定済み（2026-07-07）**: v0 が schema-of-record、v1 + migrations は standby 資産。Phase 0.11-0.13 は「concepts/ に再導出不能な状態を書き込む最初の機能」と同一サイクルで実施 — [裁定](./plans/20260707194819_schema-regime-decision.md) |
 
 ---
 

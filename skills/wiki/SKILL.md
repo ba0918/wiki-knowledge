@@ -284,10 +284,15 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
 
 ### プロセス
 
-1. **index.md スキャン**: `{wiki_root}/index.md` を読み、質問に関連しそうな記事を特定する
-2. **関連記事を読む**: 特定した記事を全文読み込む。記事内の `[[wikilink]]` を1段階だけ辿り、関連性が高ければそれも読む（判定基準: その記事を読むことで質問への回答の正確性が上がる場合のみ辿る。網羅目的では辿らない）
+1. **候補選定（retrieval pre-pass）**: 質問からキーワードを抽出し（日本語・英語の両方が考えられる場合は両方入れる）、以下を実行する:
+   ```bash
+   python3 skills/wiki/scripts/query_retrieve.py --wiki-root {wiki_root} --keywords <kw1> <kw2> ...
+   ```
+   graph layer（outbound + backlink の両方向展開）と Trust Score を消費した候補リスト（スコア・trust・選定理由つき）が返る。`outputs/graph.json` が無い場合は exit 2 で停止するので、先に `python3 skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}` を実行する
+2. **関連記事を読む**: 候補リストの上位から、その記事を読むことで回答の正確性が上がるものだけを選んで全文読み込む（網羅目的では読まない）。候補リストは提示であり検閲ではない — 候補外の記事が必要と判断したら `{wiki_root}/index.md` から補ってよい
 3. **回答合成**: 以下のルールで回答を組み立てる
    - 主張には必ず `[[slug]]` で出典を付ける
+   - **trust-aware 引用**: retrieval 候補リストで trust が **0.30 未満** の記事を引用する場合、当該引用箇所に「（信頼度低: {trust}）」を付す
    - 記事間の一致点・矛盾点を明示する
    - Wiki にカバーされていない領域を「ギャップ」として指摘し、**トピック名を明示する**（例: 「RAG アーキテクチャについては Wiki にまだ記事がない」→ gap_topic: `RAG architecture`）
    - 質問の性質に応じてフォーマットを選ぶ（事実→散文、比較→テーブル、手順→番号付きリスト）
@@ -388,7 +393,7 @@ python3 scripts/lint-wiki.py --wiki-root {wiki_root}
 - **coverage_gap** 🔵 — 2 回以上参照されているが記事がない
 - **link_quality** 🟡 — 一方向リンク、`related` と本文 wikilink の不一致
 - **article_quality** 🟡 — 50 words 未満の短記事、推測ブロック 30% 超
-- **format_violations** 🔴/🟡 — slug 命名・schema・category/type/date/tags 検証
+- **format_violations** 🔴/🟡 — slug 命名・schema・category/type/date/tags 検証。`schema_version` を持つ記事（未採用の v1）は `schema_version_unadopted` 🔴 1件で報告
 - **wikilink_rendering** 🟡 — `[[slug]]` に GitHub Web UI 用併記 `([↗](slug.md))` が付いていない（`wikilink_render.py --write` で修正）
 - **index_sync** 🟡 — `index.md` と `concepts/` の乖離（未掲載記事 = index_missing_entry、存在しない記事の掲載 = index_stale_entry。`index.md` 自体の不在は 🔵 index_missing）
 

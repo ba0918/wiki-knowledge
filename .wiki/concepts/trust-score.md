@@ -3,8 +3,9 @@ title: Trust Score — Wiki 記事の信頼度スコア
 type: wiki
 source_refs:
   - "raw/articles/20260406-trust-score-feature.md"
+  - "raw/articles/20260707-trust-score-v2-query-retrieve.md"
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-07-07
 category: concepts
 tags: [trust-score, quality, metrics, scoring, derived-value]
 related:
@@ -26,21 +27,21 @@ Trust Score は、Wiki 記事ごとに「どの程度信頼できるか」を 0.
 Trust Score はこれらの品質シグナルを統合し、記事の信頼度を数値化する。用途は3つ:
 
 - **lint 時**: スコア 0.3 未満の記事を警告として検出
-- **query 時**: 引用元の信頼度を把握（Phase 3b で統合予定）
+- **query 時**: retrieval pre-pass（`query_retrieve.py`）が各候補記事に trust を注釈し、0.30 未満の記事の引用には「（信頼度低）」が付される
 - **運用時**: Wiki 全体の健全性を定期モニタリング
 
-## 4つの計算要素
+## 4つの計算要素（v2 — 絶対スケール）
 
-| 要素 | 重み | raw value | 根拠 |
-|------|------|-----------|------|
-| ソース数 | 0.30 | `len(source_refs)` | 複数ソースで裏付けされた記事は信頼性が高い |
-| 鮮度 | 0.20 | `max(0.0, 1.0 - elapsed_days / 365)` | 線形減衰。365日で 0.0 |
-| 引用頻度 | 0.30 | [[querylog]] ([↗](querylog.md)) の `sources_cited` 出現回数 | 実際に引用される記事は有用性が高い |
-| backlink数 | 0.20 | 他記事からの被参照数（deduplicated） | ハブ記事は構造的に重要 |
+| 要素 | 重み | v2 算式 | 根拠 |
+|------|------|---------|------|
+| ソース数 | 0.30 | `n / (n + 1)` | 1件=0.50、2件=0.67、3件=0.75。複数ソースで裏付けされた記事は信頼性が高い（逓減リターン） |
+| 鮮度 | 0.20 | `0.5 ** (elapsed_days / 365)` | 半減期365日。1年=0.50、2年=0.25。**0にならない** — スナップショット方針では経過時間は「上流との乖離リスクの漸増」であって無効化ではない。`updated` 無しのみ 0.0 |
+| 引用頻度 | 0.30 | `c / (c + 2)`（c = [[querylog]] ([↗](querylog.md)) の `sources_cited` 出現回数） | 実際に引用される記事は有用性が高い |
+| backlink数 | 0.20 | `b / (b + 2)`（b = 他記事からの被参照数、deduplicated） | ハブ記事は構造的に重要 |
 
-### 正規化
+### 絶対スケール（v1 の min-max 正規化は廃止）
 
-各要素の raw value を全記事にわたって min-max 正規化し、0.0〜1.0 に変換する。エッジケース対応として、記事数が 3 未満の場合は全要素を 0.5 固定とする。min と max が等しい場合も同様。
+v1 では各要素の raw value を全記事にわたって min-max 正規化していたが、これはスコアを「wiki 内相対評価」にしてしまい、どんな完璧な wiki でも各要素の最下位が 0.00 に張り付く一方、警告閾値 0.30 は絶対値として扱われるという意味論の破綻があった（実測: 12記事中10記事が 0.30 未満）。v2 では全要素が記事単体で決まる絶対的な飽和カーブとなり、0.30 閾値が安定した意味を持つ。
 
 ### フォールバック（QueryLog 空）
 
@@ -87,7 +88,7 @@ python3 trust_score.py --wiki-root .wiki [--format table|json|report]
 
 ## テスト
 
-28件のテストケースで正規化の境界値、backlink の deduplicate、フォールバック重み配分、鮮度の線形減衰、重み定数の合計検証などをカバーしている。
+30件のテストケースで飽和カーブの境界値、半減期減衰、絶対スケール性（記事単体でスコアが決まること）、backlink の deduplicate、フォールバック重み配分、重み定数の合計検証などをカバーしている。
 
 ## 関連
 
@@ -96,3 +97,4 @@ python3 trust_score.py --wiki-root .wiki [--format table|json|report]
 ## 出典
 
 - [Trust Score 実装解説](../raw/articles/20260406-trust-score-feature.md)
+- [Trust Score v2 と Query Retrieval Pre-pass の設計](../raw/articles/20260707-trust-score-v2-query-retrieve.md)

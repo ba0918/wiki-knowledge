@@ -15,7 +15,8 @@ from trust_score import (
     compute_trust_scores,
     count_backlinks,
     count_citations,
-    normalize_scores,
+    freshness_factor,
+    saturating,
 )
 
 
@@ -40,30 +41,45 @@ def _make_article(
 
 
 # ---------------------------------------------------------------------------
-# normalize_scores
+# Absolute factor curves (v2 — no min-max normalization)
 # ---------------------------------------------------------------------------
 
-class TestNormalizeScores:
-    def test_basic_normalization(self):
-        assert normalize_scores([0, 5, 10]) == [0.0, 0.5, 1.0]
+class TestSaturating:
+    def test_zero_count(self):
+        assert saturating(0, 1) == 0.0
 
-    def test_fewer_than_3_returns_half(self):
-        assert normalize_scores([10, 20]) == [0.5, 0.5]
+    def test_source_curve(self):
+        """k=1: 1 source=0.50, 2=0.67, 3=0.75 — diminishing returns."""
+        assert saturating(1, 1) == pytest.approx(0.5)
+        assert saturating(2, 1) == pytest.approx(2 / 3)
+        assert saturating(3, 1) == pytest.approx(0.75)
 
-    def test_empty_list(self):
-        assert normalize_scores([]) == []
+    def test_backlink_curve(self):
+        """k=2: 1=0.33, 2=0.50, 6=0.75."""
+        assert saturating(1, 2) == pytest.approx(1 / 3)
+        assert saturating(2, 2) == pytest.approx(0.5)
+        assert saturating(6, 2) == pytest.approx(0.75)
 
-    def test_single_element(self):
-        assert normalize_scores([42]) == [0.5]
+    def test_never_reaches_one(self):
+        assert saturating(1000, 1) < 1.0
 
-    def test_all_same_value(self):
-        """When min == max, all normalized values are 0.5."""
-        assert normalize_scores([3, 3, 3, 3]) == [0.5, 0.5, 0.5, 0.5]
 
-    def test_min_max_boundary(self):
-        result = normalize_scores([1, 1, 1, 100])
-        assert result[0] == 0.0
-        assert result[-1] == 1.0
+class TestFreshnessFactor:
+    def test_today_is_one(self):
+        today = date(2026, 4, 6)
+        assert freshness_factor(today, today) == pytest.approx(1.0)
+
+    def test_half_life_365_days(self):
+        assert freshness_factor(date(2025, 4, 6), date(2026, 4, 6)) == pytest.approx(0.5, abs=0.01)
+
+    def test_two_years_is_quarter_not_zero(self):
+        """Snapshot semantics: staleness is divergence *risk*, never invalidity."""
+        f = freshness_factor(date(2024, 4, 6), date(2026, 4, 6))
+        assert f == pytest.approx(0.25, abs=0.01)
+        assert f > 0.0
+
+    def test_none_updated_is_zero(self):
+        assert freshness_factor(None, date(2026, 4, 6)) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +204,8 @@ class TestComputeTrustScores:
         for s in scores:
             assert 0.0 <= s.score <= 1.0
 
-    def test_freshness_linear_decay(self):
-        """Freshness: 0 days=1.0, 365 days=0.0, 730 days=0.0."""
+    def test_freshness_half_life_decay(self):
+        """Freshness v2: 0 days=1.0, 365 days=0.5, 730 days=0.25 (never 0)."""
         today = date(2026, 4, 6)
         articles = [
             _make_article("fresh", source_refs=["r"], updated=today),
@@ -198,25 +214,26 @@ class TestComputeTrustScores:
         ]
         scores = compute_trust_scores(articles, [], today=today)
         by_slug = {s.slug: s for s in scores}
-        assert by_slug["fresh"].freshness_raw == 1.0
-        assert by_slug["old"].freshness_raw == pytest.approx(0.0, abs=0.01)
-        assert by_slug["ancient"].freshness_raw == 0.0
+        assert by_slug["fresh"].freshness_raw == pytest.approx(1.0)
+        assert by_slug["old"].freshness_raw == pytest.approx(0.5, abs=0.01)
+        assert by_slug["ancient"].freshness_raw == pytest.approx(0.25, abs=0.01)
+        assert by_slug["ancient"].freshness_raw > 0.0
 
-    def test_fewer_than_3_articles_norm_fixed(self):
-        """With < 3 articles, all normalized values should be 0.5."""
+    def test_factors_are_absolute_not_relative(self):
+        """v2: factor scores depend only on the article itself, not on the
+        rest of the wiki (no min-max). Two articles suffice."""
         articles = [
-            _make_article("a", source_refs=["r1", "r2"]),
-            _make_article("b", source_refs=["r1"]),
+            _make_article("a", source_refs=["r1", "r2"], updated=date(2026, 4, 6)),
+            _make_article("b", source_refs=["r1"], updated=date(2026, 4, 6)),
         ]
         scores = compute_trust_scores(articles, [], today=date(2026, 4, 6))
-        for s in scores:
-            assert s.source_norm == 0.5
-            assert s.freshness_norm == 0.5
-            assert s.citation_norm == 0.5
-            assert s.backlink_norm == 0.5
+        by_slug = {s.slug: s for s in scores}
+        assert by_slug["a"].source_norm == pytest.approx(2 / 3, abs=1e-3)
+        assert by_slug["b"].source_norm == pytest.approx(0.5, abs=1e-3)
 
-    def test_all_same_scores(self):
-        """All articles with identical metadata get same score."""
+    def test_uniform_wiki_does_not_sink_to_zero(self):
+        """v2: identical healthy articles share an identical, non-zero score.
+        Under v1 min-max the bottom of every distribution was pinned near 0."""
         articles = [
             _make_article("a", source_refs=["r"], updated=date(2026, 4, 1)),
             _make_article("b", source_refs=["r"], updated=date(2026, 4, 1)),
@@ -224,6 +241,8 @@ class TestComputeTrustScores:
         ]
         scores = compute_trust_scores(articles, [], today=date(2026, 4, 6))
         assert all(s.score == scores[0].score for s in scores)
+        # source 0.5*0.4 + freshness ~0.99*0.3 + backlink 0*0.3 ≈ 0.50
+        assert scores[0].score == pytest.approx(0.5, abs=0.01)
 
     def test_source_refs_1_vs_many(self):
         """Article with more sources should score higher on source dimension."""

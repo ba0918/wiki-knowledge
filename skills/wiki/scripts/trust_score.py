@@ -4,14 +4,23 @@
 Usage:
     python trust_score.py --wiki-root .wiki [--format table|json|report]
 
-Trust Score is a weighted sum of 4 factors (normalized 0.0-1.0):
-  - Source count   (0.30)
-  - Freshness      (0.20)
-  - Citation freq  (0.30)  -- from QueryLog
-  - Backlink count (0.20)
+Trust Score v2 is a weighted sum of 4 factors, each an **absolute** score in
+0.0-1.0 (v1's min-max normalization made scores relative to the rest of the
+wiki, which broke the absolute 0.30 warning threshold — in a uniform wiki
+someone always sank to 0; see docs/plans/20260707200608):
+
+  - Source count   (0.30)  saturating n/(n+1): 1=0.50, 2=0.67, 3=0.75
+  - Freshness      (0.20)  half-life decay 0.5**(days/365): 1y=0.50, 2y=0.25
+                           (snapshot semantics — staleness is divergence
+                           *risk*, never invalidity, so it never reaches 0)
+  - Citation freq  (0.30)  saturating c/(c+2), from QueryLog
+  - Backlink count (0.20)  saturating b/(b+2)
 
 When QueryLog is empty, citation is excluded and weights redistribute:
   Source 0.40, Freshness 0.30, Backlink 0.30
+
+``ArticleScore.*_norm`` fields hold the absolute factor scores (the name is
+kept for output-format compatibility with v1).
 """
 
 from __future__ import annotations
@@ -195,21 +204,39 @@ def count_citations(
     return counts
 
 
-def normalize_scores(raw_values: list[float]) -> list[float]:
-    """Min-max normalize a list of raw values to 0.0-1.0.
+FRESHNESS_HALF_LIFE_DAYS = 365.0
+SOURCE_SATURATION_K = 1.0
+CITATION_SATURATION_K = 2.0
+BACKLINK_SATURATION_K = 2.0
 
-    If fewer than 3 values, returns all 0.5 (mid-point fallback).
-    If min == max, returns all 0.5.
+
+def saturating(count: float, k: float) -> float:
+    """Absolute saturating curve ``count / (count + k)``.
+
+    Maps a non-negative count to 0.0-1.0 with diminishing returns: the k-th
+    unit reaches 0.5, and the curve approaches (but never reaches) 1.0.
+    Unlike min-max normalization, the result depends only on the article
+    itself, so the 0.30 warning threshold has a stable meaning.
     """
-    if len(raw_values) < 3:
-        return [0.5] * len(raw_values)
+    if count <= 0:
+        return 0.0
+    return count / (count + k)
 
-    lo = min(raw_values)
-    hi = max(raw_values)
-    if hi == lo:
-        return [0.5] * len(raw_values)
 
-    return [(v - lo) / (hi - lo) for v in raw_values]
+def freshness_factor(updated: date | None, today: date) -> float:
+    """Half-life freshness decay: ``0.5 ** (elapsed_days / 365)``.
+
+    Snapshot semantics: articles pin facts to their capture point
+    (``source_revision`` etc.), so age expresses *divergence risk*, not
+    invalidity — the factor decays but never reaches 0. Only an article
+    with no ``updated`` date at all scores 0.0.
+    """
+    if updated is None:
+        return 0.0
+    elapsed = (today - updated).days
+    if elapsed <= 0:
+        return 1.0
+    return 0.5 ** (elapsed / FRESHNESS_HALF_LIFE_DAYS)
 
 
 def compute_trust_scores(
@@ -243,21 +270,15 @@ def compute_trust_scores(
 
     for a in articles:
         source_raws.append(float(len(a.source_refs)))
-
-        if a.updated is not None:
-            elapsed = (today - a.updated).days
-            freshness_raws.append(max(0.0, 1.0 - elapsed / 365))
-        else:
-            freshness_raws.append(0.0)
-
+        freshness_raws.append(freshness_factor(a.updated, today))
         citation_raws.append(float(citations.get(a.slug, 0)))
         backlink_raws.append(float(backlinks.get(a.slug, 0)))
 
-    # Normalize
-    source_norms = normalize_scores(source_raws)
-    freshness_norms = normalize_scores(freshness_raws)
-    citation_norms = normalize_scores(citation_raws)
-    backlink_norms = normalize_scores(backlink_raws)
+    # Absolute factor scores (v2 — no min-max normalization)
+    source_norms = [saturating(v, SOURCE_SATURATION_K) for v in source_raws]
+    freshness_norms = list(freshness_raws)  # freshness_factor is already 0-1
+    citation_norms = [saturating(v, CITATION_SATURATION_K) for v in citation_raws]
+    backlink_norms = [saturating(v, BACKLINK_SATURATION_K) for v in backlink_raws]
 
     results: list[ArticleScore] = []
     for i, a in enumerate(articles):
