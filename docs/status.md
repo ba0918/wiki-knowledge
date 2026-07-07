@@ -8,11 +8,12 @@
 
 | Cycle ID | Feature | Started | Phase | Plan |
 |----------|---------|---------|-------|------|
+| `20260707204744` | SKILL.md 決定論ロジックのスクリプト抽出（security_scan / querylog_append / log_append） | 2026-07-07 20:47:44 | 🟢 Complete | [plan](./plans/20260707204744_skill-deterministic-extraction.md) |
 | `20260707200608` | Query の derived layer 消費者化（query_retrieve + Trust Score v2） | 2026-07-07 20:06:08 | 🟢 Complete | [plan](./plans/20260707200608_query-derived-layer-consumer.md) |
 | `20260707194819` | Schema 体制の裁定（v0 = schema-of-record / v1 = standby） | 2026-07-07 19:48:19 | 🟢 Complete | [plan](./plans/20260707194819_schema-regime-decision.md) |
 | `20260703224551` | repo ingest MVP（5リポジトリ横断 Q&A wiki の入口） | 2026-07-03 22:45:51 | 🟢 Complete | [plan](./plans/20260703224551_repo-ingest-mvp.md) |
 
-**Current Focus:** schema 体制裁定完了（v0 宣言 + 採用トリガー定義 + `Source.revision` 正式追加 + lint `schema_version_unadopted` ガード、493 tests）。**5リポジトリ実適用は v0 のまま進めてよい（公式にアンブロック）**。次の候補: 仕事の5リポジトリへの実適用、query の derived layer 消費者化（Pitch 2）、SKILL.md 決定論ロジックのスクリプト抽出（Pitch 3）、raw slug 命名統一。
+**Current Focus:** Pitch 3 完了（SKILL.md の決定論ロジック 3 種 — セキュリティ regex スキャン / QueryLog JSONL 手組み / log.md 定型追記 — を `security_scan.py` / `querylog_append.py` / `log_append.py` に TDD で抽出、592 tests）。only-you の 3 ピッチが全て完了。次の候補: 仕事の5リポジトリへの実適用、raw slug 命名統一、検出パターン強化（Slack トークン・GitHub PAT 等）。
 
 ## ⏸️ Paused
 

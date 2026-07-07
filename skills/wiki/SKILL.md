@@ -137,32 +137,40 @@ git URL の判定: `https://…/owner/repo(.git)` / `ssh://…` / `git@host:owne
 
 ### セキュリティチェック（必須）
 
-1. **パス traversal 防止**: ファイル名を英数字+ハイフンにサニタイズ（拡張子のドットは許可、先頭の `./` は正規化して除去）。`..` や絶対パスを拒否
-2. **機密データスキャン**: 以下の正規表現パターンに一致する場合は警告して処理を中断
-   - API キー: `(sk-|api[_-]?key|token)[a-zA-Z0-9_\-]{20,}`
-   - メールアドレス: `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`
-   - 電話番号: `\b0[0-9]{1,4}-?[0-9]{1,4}-?[0-9]{4}\b`
-   - AWS キー: `AKIA[0-9A-Z]{16}`
-3. **プロンプトインジェクション検出**: 以下のパターンに一致する場合は警告
-   - `(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?)`
-   - `(?i)you\s+are\s+now\s+`
-   - `(?i)system\s*:\s*`
+`security_scan.py` を実行する（パターン定義はスクリプトが単一の真実源。目視でのパターン照合はしない）:
+
+```bash
+# ファイル入力の場合
+python3 skills/wiki/scripts/security_scan.py <ソースファイル>... --filename {保存予定のファイル名}
+
+# URL / テキスト直接入力の場合（取得済みコンテンツを stdin で渡す）
+python3 skills/wiki/scripts/security_scan.py --stdin --filename {保存予定のファイル名} <<'EOF'
+{コンテンツ}
+EOF
+```
+
+チェック 3 項目:
+1. **パス traversal 防止**（`--filename` の検証）: 英数字+ハイフン+拡張子ドットのみ許可、`..`・絶対パスを拒否
+2. **機密データスキャン**: API キー / メールアドレス / 電話番号 / AWS キー
+3. **プロンプトインジェクション検出**: 指示上書き / ロール乗っ取り / system プロンプト偽装
+
+exit code: `0` = クリーン / `1` = 検出あり（**処理を中断**） / `2` = 引数エラー。
 
 ### プロセス
 
-1. セキュリティチェックを実行。完了後、以下のサマリーを表示する:
+1. ファイル名を生成: `{YYYYMMDD}-{slug}.md`（articles）/ そのまま（files）
+2. セキュリティチェックを実行し（`--filename` には手順 1 で生成した名前を渡す）、スクリプトの ✅/❌ サマリー出力をそのまま表示する:
    ```
    ✅ パス traversal: OK
    ✅ 機密データ: OK
    ✅ プロンプトインジェクション: OK
    ```
-   いずれかに問題がある場合は処理を中断し、該当チェック項目を `❌ {項目名}: NG（{N} 件検出）` の形式で表示する（`{N}` は当該チェック項目内の合計検出件数。プロンプトインジェクション検出時も機密データと同様に中断する）。
+   exit 1（`❌ {項目名}: NG（{N} 件検出）` あり）の場合は処理を中断する（プロンプトインジェクション検出時も機密データと同様に中断する）。
 
    **中断時の挙動**:
    - `{wiki_root}/raw/` への保存・`log.md` への追記は一切行わない（Wiki を無変更のまま保つ。中断エントリも書かない）
-   - ✅/❌ サマリーに続けて、検出内容（ファイル名・行番号・検出値・一致パターン）と対処案（該当箇所を除去・置換して再実行）を提示する
+   - スクリプトが出力する検出内容（ファイル名・行番号・検出値・一致パターン）に続けて、対処案（該当箇所を除去・置換して再実行）を提示する
    - 「── ingest 完了 ──」の完了メッセージは表示しない
-2. ファイル名を生成: `{YYYYMMDD}-{slug}.md`（articles）/ そのまま（files）
 3. フロントマターを付与（必須フィールドと任意フィールドの区別に注意）:
    ```yaml
    ---
@@ -173,7 +181,10 @@ git URL の判定: `https://…/owner/repo(.git)` / `ssh://…` / `git@host:owne
    ---
    ```
 4. `{wiki_root}/raw/articles/` または `{wiki_root}/raw/files/` に保存
-5. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] ingest | {slug} ({source_kind})`
+5. `log.md` に追記:
+   ```bash
+   python3 skills/wiki/scripts/log_append.py ingest --wiki-root {wiki_root} --slug {slug} --source-kind {source_kind}
+   ```
 
 ### 完了メッセージ
 
@@ -209,7 +220,7 @@ python3 scripts/repo_ingest.py <url-or-path>... --wiki-root {wiki_root}
 1. manifest の tier1（README / architecture / adr）を基本とし、ユーザーと選定を確認（自動選定は tier1 のみ）
 2. 各ファイルを既存の file ingest フロー（セキュリティチェック込み）で `raw/files/{slug}/` に保存
 3. フロントマターに `source_url`（リモート URL、userinfo 除去済み）+ `source_revision`（commit hash）+ `source_path` を付与（[references/frontmatter-schemas.md](references/frontmatter-schemas.md) の repo 節参照）
-4. log.md に `## [YYYY-MM-DD] ingest | {slug} (repo @ {short-hash})` を追記
+4. log.md に追記: `python3 skills/wiki/scripts/log_append.py ingest --wiki-root {wiki_root} --slug {slug} --source-kind "repo @ {short-hash}"`
 
 **段3 — 一括 compile**:
 
@@ -259,7 +270,10 @@ python3 scripts/repo_ingest.py <url-or-path>... --wiki-root {wiki_root}
 
 1. `{wiki_root}/index.md` に新記事を追加（カテゴリ別、1行サマリー）
 2. `CLAUDE.md` の Articles セクションを更新
-3. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] compile | {Title} ({word_count} words, {N} sources)`（`word_count` は `wc -w` 相当の値。`{N} sources` は件数に応じて `1 source` / `2 sources` と単複を使い分ける）
+3. `log.md` に追記（単複の使い分けはスクリプトが処理する。`word_count` は `wc -w` 相当の値）:
+   ```bash
+   python3 skills/wiki/scripts/log_append.py compile --wiki-root {wiki_root} --title "{Title}" --word-count {N} --sources {N}
+   ```
 4. **wikilink rendering**: `python3 skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/` を実行し、`[[slug]]` を GitHub Web UI で踏める `[[slug]] ([↗](slug.md))` 形式に併記する（idempotent）
 
 **注**: compile 単体では graph_gen / lint は実行しない（`wiki cycle` が orchestrate する）。compile 後は `outputs/graph.json` が陳腐化するため、次に lint する際は graph_gen の再実行が必要。
@@ -304,7 +318,7 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
 1. `{wiki_root}/concepts/{slug}.md` に記事として保存（フロントマターに `tags: [query, synthesis]` を含める）
 2. Backlink Audit を実行（compile と同じ手順）
 3. `{wiki_root}/index.md` と `CLAUDE.md` を更新
-4. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] promote | {Title} (from query)`
+4. `log.md` に追記: `python3 skills/wiki/scripts/log_append.py promote --wiki-root {wiki_root} --title "{Title}"`
 
 保存しない場合:
 1. `{wiki_root}/outputs/queries/{YYYYMMDD}-{slug}.md` に回答を保存
@@ -323,26 +337,29 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
    promoted: false
    ---
    ```
-2. `{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] query | {question summary}`（`{question summary}` は質問の短い要約で、保存ファイルの `title` と同一にする）
+2. `log.md` に追記（`{question summary}` は質問の短い要約で、保存ファイルの `title` と同一にする）:
+   ```bash
+   python3 skills/wiki/scripts/log_append.py query --wiki-root {wiki_root} --summary "{question summary}"
+   ```
 
 ### QueryLog 追記（保存判断の後に必ず実行）
 
-回答の保存・不保存の処理が終わった後、以下の手順で QueryLog エントリを追記する:
+回答の保存・不保存の処理が終わった後、`querylog_append.py` でエントリを追記する（id 生成・`sources_cited` の wikilink 抽出・schema 検証・JSONL 追記はスクリプトが担う。JSON の手組みはしない）:
 
-1. **エントリを組み立てる**:
-   - `id`: `q_{YYYYMMDDTHHMMSS}` 形式（現在時刻から生成、read-before-write 不要）
-   - `timestamp`: ISO 8601 形式の現在時刻
-   - `question`: ユーザの元の質問文
-   - `sources_consulted`: ステップ 1-2 で読み込んだ全記事パス（`{wiki_root}` からの相対）。`concepts/` の記事のみを数え、`index.md` は含めない
-   - `sources_cited`: ユーザに提示した回答テキスト（保存ファイル本文と同一内容）中の `[[wikilink]]` を正規表現 `\[\[([a-z0-9-]+)\]\]` で抽出し、`concepts/{slug}.md` に変換
-   - `gap_noted`: 回答中にギャップを指摘したなら `true`
-   - `gap_topics`: 指摘したギャップのトピック名リスト（指摘なしなら空配列）
-   - `promoted`: 保存を承認された場合 `true`
-   - `promoted_to`: promote した場合はそのパス、それ以外は `null`
+```bash
+python3 skills/wiki/scripts/querylog_append.py --wiki-root {wiki_root} \
+  --question "{ユーザの元の質問文}" \
+  --consulted concepts/{slug1}.md concepts/{slug2}.md \
+  --answer-file {保存した回答ファイルのパス} \
+  [--gap-topics "{topic1}" "{topic2}"] \
+  [--promoted --promoted-to concepts/{slug}.md]
+```
 
-2. **JSON 1行として `{wiki_root}/outputs/querylog.jsonl` に追記する**（ファイルが存在しない場合は自動作成される）
-
-3. スキーマ参照: `.wiki/schema/querylog-schema.json`
+- `--consulted`: ステップ 1-2 で読み込んだ全記事パス（`{wiki_root}` からの相対）。`concepts/` 以外（`index.md` 等）はスクリプトが除外する
+- `--answer-file`: ユーザに提示した回答テキストの保存先（promote 済みなら `concepts/{slug}.md`、未保存なら `outputs/queries/{YYYYMMDD}-{slug}.md`）。`sources_cited` はここから抽出される
+- `--gap-topics`: 回答中に指摘したギャップのトピック名（指摘なしなら省略。`gap_noted` は自動導出）
+- exit code: `0` = 追記成功 / `1` = 検証エラー（追記されない） / `2` = 引数エラー
+- スキーマ参照: `.wiki/schema/querylog-schema.json`（スクリプトのテストが required フィールドの同期を機械検証している）
 
 **⚠ 注意:** `querylog.jsonl` にはユーザの質問文がそのまま記録される。デフォルトで `.gitignore` 対象（`.wiki/.gitignore`）。
 
@@ -449,7 +466,11 @@ severity 3段階で `{wiki_root}/outputs/reports/{YYYYMMDD}-lint.md` に出力:
 
 ### 後処理
 
-`{wiki_root}/log.md` に追記: `## [YYYY-MM-DD] lint | {N} errors, {N} warnings, {N} info`
+`log.md` に追記:
+
+```bash
+python3 skills/wiki/scripts/log_append.py lint --wiki-root {wiki_root} --errors {N} --warnings {N} --info {N}
+```
 
 ### 完了メッセージ
 
