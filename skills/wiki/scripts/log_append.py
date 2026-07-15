@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """log.md 操作ログの定型追記。
 
-SKILL.md の各ワークフロー（ingest / compile / promote / query / lint）に
+SKILL.md の各ワークフロー（ingest / compile / promote / query / lint / discover）に
 散在していた ``## [YYYY-MM-DD] {op} | ...`` テンプレートを単一の真実源として
 ここに抽出したもの。単複の使い分け（1 source / 2 sources）等のフォーマット
 ドリフトをスクリプト側で吸収する。
@@ -13,6 +13,7 @@ Usage:
     python3 log_append.py promote --wiki-root .wiki --title "RAG アーキテクチャ"
     python3 log_append.py query   --wiki-root .wiki --summary "Trust Score の計算方法"
     python3 log_append.py lint    --wiki-root .wiki --errors 0 --warnings 3 --info 1
+    python3 log_append.py discover --wiki-root .wiki --slug myapp --articles 4
 
 共通オプション: --date YYYY-MM-DD（省略時はローカル今日）/ --note（末尾に「 — {note}」を付す）
 
@@ -33,7 +34,7 @@ from pathlib import Path
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-OPS = ("ingest", "compile", "promote", "query", "lint")
+OPS = ("ingest", "compile", "promote", "query", "lint", "discover")
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +55,10 @@ def format_entry(op: str, entry_date: str, fields: dict, note: str | None = None
         body = fields["summary"]
     elif op == "lint":
         body = f"{fields['errors']} errors, {fields['warnings']} warnings, {fields['info']} info"
+    elif op == "discover":
+        n = fields["articles"]
+        unit = "article" if n == 1 else "articles"
+        body = f"{fields['slug']} ({n} {unit})"
     else:
         raise ValueError(f"未知の op: {op!r}（{'/'.join(OPS)} のいずれか）")
 
@@ -110,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
     p_lint.add_argument("--errors", type=int, required=True)
     p_lint.add_argument("--warnings", type=int, required=True)
     p_lint.add_argument("--info", type=int, required=True)
+
+    p_discover = subparsers.add_parser("discover", parents=[common])
+    p_discover.add_argument("--slug", required=True)
+    p_discover.add_argument("--articles", type=int, required=True, help="生成された記事数")
 
     args = parser.parse_args(argv)
 
