@@ -38,7 +38,7 @@
 ## 📝 Design Decisions（このセッションで決まったこと）
 
 - **単一ディレクトリ集約**: Wiki データは `.wiki/`（デフォルト）に集約。`wiki-init --path` でカスタマイズ可能
-- **CLAUDE.md の wiki_root**: YAML フロントマターで宣言（テーブル形式は LLM が読みにくいため却下）
+- **AGENTS.md の wiki_root**: 本文中に `wiki_root: .wiki` として記載（CLAUDE.md は `@AGENTS.md` で参照する薄いラッパー）
 - **パス解決ルール**: フロントマター = `{wiki_root}` 基準、本文 Markdown リンク = ファイルからの相対パス
 - **compile 対象選択**: デフォルト = 未コンパイル自動検出、パス指定、`--all` の3パターン
 - **明示的呼び出し**: `/wiki` スラッシュコマンド方式（description ワードトリガーは信用しない）

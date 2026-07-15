@@ -62,7 +62,7 @@ Ingest → Compile → Query → Lint → (back to Ingest)
 
 ### パス解決
 
-全スキルは CLAUDE.md の YAML フロントマターから `wiki_root` を取得する。
+全スキルは `AGENTS.md`（または `CLAUDE.md`）から `wiki_root` を取得する。
 
 ```yaml
 ---
