@@ -1,0 +1,20 @@
+{
+  "name": "wiki-knowladge",
+  "interface": {
+    "displayName": "Wiki Knowledge Base"
+  },
+  "plugins": [
+    {
+      "name": "wiki-knowladge",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Knowledge Management"
+    }
+  ]
+}

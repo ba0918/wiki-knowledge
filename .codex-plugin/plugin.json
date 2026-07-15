@@ -1,0 +1,35 @@
+{
+  "name": "wiki-knowladge",
+  "version": "0.4.2",
+  "description": "LLM Wiki Knowledge Base — source documents to interlinked Markdown wiki with trust scoring and gap detection",
+  "author": {
+    "name": "ba0918"
+  },
+  "skills": "./skills/",
+  "license": "MIT",
+  "interface": {
+    "displayName": "Wiki Knowledge Base",
+    "shortDescription": "Build and maintain LLM-powered knowledge bases from any source",
+    "longDescription": "Compiles source documents (URLs, files, articles, git repositories) into an interlinked Markdown wiki with wikilink cross-references, trust scoring, gap detection, and automated quality linting. Supports domain knowledge extraction from source code via the discover workflow. Provides init, ingest, compile, query, lint, discover, and cycle operations.",
+    "developerName": "ba0918",
+    "category": "Knowledge Management",
+    "capabilities": [
+      "wiki-initialization",
+      "source-ingestion",
+      "article-compilation",
+      "knowledge-query",
+      "quality-linting",
+      "trust-scoring",
+      "gap-detection",
+      "repo-ingest",
+      "source-code-discovery",
+      "graph-generation"
+    ],
+    "defaultPrompt": [
+      "Initialize a new wiki in this project.",
+      "Ingest this URL into the wiki.",
+      "What does the wiki know about this topic?",
+      "Run a full wiki cycle (ingest → compile → lint)."
+    ]
+  }
+}
