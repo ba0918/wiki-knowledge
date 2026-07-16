@@ -1,0 +1,12 @@
+# wiki-browser-extract 別系統の opt-in 依存（本体 requirements.txt を汚さない）。
+# flat requirements 構成に extras 機構がないため別ファイルで opt-in を表現する。
+#
+# インストール:
+#   uv pip install -r requirements-browser.txt
+#   python -m playwright install chromium   # ブラウザバイナリの取得（初回のみ）
+#
+# 実 E2E は BROWSER_EXTRACT_SMOKE 環境変数ゲート下でのみ実行（未設定時 skip）。
+
+# route_web_socket（全 WebSocket 拒否）が 1.48 で追加されたため下限を固定。
+# 互換範囲方針は本体 requirements.txt と同じ: 動作確認した major.minor で上限を固定する。
+playwright>=1.48,<1.55
