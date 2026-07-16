@@ -526,6 +526,7 @@ class TestExecuteReplayFixture:
 
         assert outcome.row_count == 3
         assert outcome.csv_sha256 == manifest["csv_sha256"]
+        assert outcome.published_at == NOW  # 監査 published / receipt と同じ時刻源
 
         state = read_state(wiki_root, plan_id)
         assert state["status"] == "consumed"

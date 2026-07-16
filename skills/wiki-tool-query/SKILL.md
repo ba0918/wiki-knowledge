@@ -82,7 +82,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py execute \
   --wiki-root {wiki_root} --plan <plan_id> --format json
 ```
 
-完了テンプレート:
+完了テンプレート（値は execute の JSON 出力から埋める）:
 
 ```
 ✅ 実行完了
@@ -90,10 +90,19 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py execute \
 - manifest: 重複 key <duplicate_key_count> 件 / NULL <要点> / csv_sha256: <digest>
 - 無害化したセル: <sanitized_cell_count> 件
 - delivery: <dir>/<run_id>/（result.csv + manifest.json）
-- 監査: plan_id <plan_id>, published at <timestamp>
+- published_at: <published_at> / plan_id: <plan_id>
 ```
 
-**consumed 後に実行が失敗した場合のテンプレート**（承認は消費済みで復活しない）:
+execute の JSON 出力に `warnings` が含まれる場合（published 監査イベントや
+receipt の記録失敗）は、その旨をテンプレートに追記して報告する — publish 自体は
+成功しており、監査の欠損は Phase B の reconcile 対象。「監査済み」と誇張しない。
+
+**失敗テンプレートの適用判定**: execute が失敗したら、まず
+`{wiki_root}/outputs/toolquery-plans/{plan_id}/state.json` の `status` を確認する:
+
+- `status: approved` のまま → 承認は未消費（検証マトリクスで拒否された等）。
+  原因を直せば**同じ plan を再 execute できる**（TTL 内なら）
+- `status: consumed` → 承認は消費済み。以下のテンプレートで報告する:
 
 ```
 ❌ 実行失敗: <reason>

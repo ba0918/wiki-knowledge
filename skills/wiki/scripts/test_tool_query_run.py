@@ -484,6 +484,8 @@ class TestExecuteCli:
         assert payload["duplicate_key_count"] == 0
         assert payload["sanitized_cell_count"] == 0
         assert payload["delivery_dir"] == "deliveries"
+        assert payload["published_at"]
+        assert payload["warnings"] == []
 
     def test_execute_without_bundle_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

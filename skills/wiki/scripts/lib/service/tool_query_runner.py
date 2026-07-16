@@ -158,6 +158,7 @@ class ExecuteOutcome:
     sanitized_cell_count: int
     delivery_dir: str  # catalog 宣言の表記
     published_path: Path
+    published_at: str
     data_as_of: str
     warnings: tuple[str, ...]
 
@@ -998,6 +999,7 @@ class ToolQueryRunner:
             if is_err(pub):
                 return _fail(_reason_value(pub.error), pub.detail)
             published = True
+            published_at = self._clock.now()
 
             warnings: list[str] = []
             audit_pub = _audit_exec(
@@ -1015,7 +1017,7 @@ class ToolQueryRunner:
                         "run_id": run_id,
                         "row_count": stats["row_count"],
                         "csv_sha256": csv_sha,
-                        "published_at": self._clock.now(),
+                        "published_at": published_at,
                         "delivery_dir": proposal.delivery_dir,
                     },
                 )
@@ -1032,6 +1034,7 @@ class ToolQueryRunner:
                     sanitized_cell_count=stats["sanitized_cell_count"],
                     delivery_dir=proposal.delivery_dir,
                     published_path=pub.value,
+                    published_at=published_at,
                     data_as_of=data_as_of,
                     warnings=tuple(warnings),
                 )

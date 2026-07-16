@@ -1,7 +1,8 @@
 ---
 title: RECIPE_TITLE（〜の抽出）
 type: wiki
-source_refs: []
+source_refs:
+  - "raw/articles/RECIPE_SOURCE_SLUG.md"
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 category: practices
@@ -33,7 +34,10 @@ related: []
 
 | 除外するもの | SQL への落とし方 | なぜ除外するか |
 |---|---|---|
-| （例）返金済みの人 | `NOT IN (SELECT user_id FROM refunds)` | 返金済みは補填対象外という業務ルール（YYYY-MM-DD の裁定） |
+| （例）返金済みの人 | `NOT EXISTS (SELECT 1 FROM refunds r WHERE r.user_id = u.user_id)` | 返金済みは補填対象外という業務ルール（YYYY-MM-DD の裁定） |
+
+`NOT IN (SELECT ...)` は副問い合わせに NULL が混ざると三値論理で**全行が落ちる**ため、
+除外条件は相関 `NOT EXISTS` で書く。
 
 ## ファネル構成
 
@@ -46,9 +50,12 @@ related: []
 
 ## 実施ログ
 
-| 日付 | plan_id | 件数 | 所要時間（受領〜引き渡し） | 気づき・条件の変化 |
-|---|---|---|---|---|
-| YYYY-MM-DD | | | | |
+所要時間の測定契約: 起点 = 依頼受領時刻（手動時と同じ）、終点 = 監査ログの
+published イベント。承認待ちは approved イベントの timestamp で控除する。
+
+| 日付 | plan_id | 件数 | 受領時刻 | published 時刻 | 承認待ち控除 | 正味所要時間 | 気づき・条件の変化 |
+|---|---|---|---|---|---|---|---|
+| YYYY-MM-DD | | | | | | | |
 
 ## 関連
 

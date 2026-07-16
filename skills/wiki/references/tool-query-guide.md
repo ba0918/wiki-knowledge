@@ -44,7 +44,7 @@ tool: events-db / plan_id: 20260716... / sql_digest: ab12...
 |---|---|---|
 | `not_approved` | 未承認（draft）で execute | approve を依頼する |
 | `already_consumed` | replay（二重 execute） | 新 prepare → 再承認 |
-| `ttl_expired` | 承認期限切れ（24h） | 新 prepare → 再承認 |
+| `ttl_expired` | plan の期限切れ（**prepare 起算 24h**。承認時刻ではない） | 新 prepare → 再承認 |
 | `sql_digest_mismatch` / `count_sql_digest_mismatch` | bundle 内 SQL の改変検出 | bundle を破棄し新 prepare |
 | `proposal_digest_mismatch` | 承認後の proposal 書き換え検出 | 同上 |
 | `catalog_digest_mismatch` | catalog が prepare 後に変更された | 新 prepare（新しい契約で承認し直す） |
@@ -59,6 +59,12 @@ Recipe は「何をどう判断して取得するか」の説明層。`{wiki_roo
 
 - **category**: `practices` / **tags**: `selection-recipe` + ドメインタグ
 - テンプレート: `skills/wiki/assets/selection-recipe-template.md`
+- **source_refs の埋め方（必須 — page-template.json は minItems: 1）**: Recipe の出典は
+  「初回実施時の依頼内容・判断メモ」。依頼の要約と裁定の経緯を
+  `{wiki_root}/raw/articles/{slug}.md` に immutable に保存し、そのパスを source_refs に
+  書く（wiki-ingest のテキスト取り込みと同じ手順）。既存の raw ソースに判断根拠が
+  ある場合はそれを指してもよい。空配列は lint（missing frontmatter / format violation）で
+  落ちる
 - 必ず書くこと:
   - 対象定義（業務言葉で 1 行）と、それを SQL 条件に落とすときの判断（なぜこの条件で表現するか）
   - **除外条件とその理由**（Why not — 「なぜ○○は含めないか」が Recipe の最重要情報）
@@ -73,6 +79,35 @@ Recipe は「何をどう判断して取得するか」の説明層。`{wiki_roo
 2. 1 回目でも、除外条件の判断に業務知識（例: 「テスト用アカウントは `email LIKE '%@example.com'` で除外」）
    が必要だった場合は作る — その判断こそが外在化する価値のある資産
 3. 実行のたびに実施ログ節へ追記し、判断が変わったら本文を更新する（履歴は git が持つ）
+
+## サンプル catalog のセットアップ
+
+`.wiki/tools/catalog.json` の `sample-events-db` は**形見本**であり、そのままでは
+実行できない（DB ファイルと delivery 先が存在しない）。試すには:
+
+```bash
+# 1. DB fixture を作る（catalog の connection.path に合わせる）
+python3 - <<'EOF'
+import sqlite3, pathlib
+pathlib.Path(".wiki/data").mkdir(exist_ok=True)
+conn = sqlite3.connect(".wiki/data/sample-events.sqlite3")
+conn.executescript("""
+CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, name TEXT, email TEXT);
+CREATE TABLE IF NOT EXISTS registrations (user_id INTEGER, event TEXT);
+CREATE TABLE IF NOT EXISTS refunds (user_id INTEGER, amount INTEGER);
+""")
+conn.commit(); conn.close()
+EOF
+
+# 2. delivery 先を作る（catalog の delivery.allowed_dirs に合わせる）
+mkdir -p .wiki/outputs/deliveries
+
+# 3. 検証
+python3 skills/wiki/scripts/tool_query_run.py catalog-validate --wiki-root .wiki
+```
+
+実データを扱う tool を登録する場合は、既存 DB への path（または base_dir）を宣言し、
+`allowed_tables` を必要最小限にして PR レビューを経る。
 
 ## catalog の変更手順
 

@@ -274,7 +274,9 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     "csv_sha256": outcome.csv_sha256,
                     "sanitized_cell_count": outcome.sanitized_cell_count,
                     "delivery_dir": outcome.delivery_dir,
+                    "published_at": outcome.published_at,
                     "data_as_of": outcome.data_as_of,
+                    "warnings": list(outcome.warnings),
                 },
                 ensure_ascii=False,
             )
@@ -289,6 +291,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         )
         print(f"csv_sha256: {outcome.csv_sha256}")
         print(f"delivery: {outcome.delivery_dir}/{outcome.run_id}/")
+        print(f"published_at: {outcome.published_at}")
         print(f"data_as_of: {outcome.data_as_of}")
     return 0
 

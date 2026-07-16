@@ -4,5 +4,6 @@ outputs/graph.json
 .cache/
 .local/
 outputs/toolquery-audit.jsonl
+outputs/toolquery-audit.jsonl.lock
 outputs/toolquery-plans/
 outputs/deliveries/
