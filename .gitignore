@@ -3,3 +3,4 @@ examples
 .claude/settings.local.json
 .claude/tmp
 .agents/artifacts
+.venv

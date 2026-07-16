@@ -651,3 +651,29 @@ playwright は下限 1.48 以上（`route_web_socket` 必須）+ major.minor 上
 browser 実 E2E テストは DB smoke と同じ opt-in 環境変数ゲート
 （`BROWSER_EXTRACT_SMOKE` 未設定時 skip）。ブラウザ非依存の判定ロジック（allowlist 照合・
 URL 正規化・状態機械・保持ポリシー判定・janitor のファイル操作・AST ゲート）は常時実行。
+
+### 実測（2026-07-17 / WSL2 Ubuntu, Python 3.12.3, uv 管理 .venv）
+
+```
+uv pip install --python .venv/bin/python -r requirements-browser.txt
+.venv/bin/python -m playwright install chromium
+```
+
+- `requirements-browser.txt` の `playwright>=1.48,<1.55` は **1.54.0** に解決された（上限内、bump 不要）
+- **WSL2 で system deps 不足は顕在化しなかった**。`chromium.launch(headless=True)` と runner が
+  実際に使う `launch_persistent_context(service_workers="block", locale/timezone/viewport 固定,
+  args=WebRTC 無効化)` + `context.route("**/*")` + `context.route_web_socket("**/*")` が
+  いずれも追加 lib なしで起動・動作した。`route_web_socket` は 1.54 で提供される（下限 1.48 と整合）
+- **system deps が不足する環境**（`error while loading shared libraries: lib*.so`）では
+  `python -m playwright install-deps chromium` 相当が必要だが、これは `apt-get` を呼ぶため
+  **sudo が要る**。その場合はエラーに出た不足 lib 名を控え、`sudo python -m playwright
+  install-deps chromium`（または `sudo apt-get install` で個別 lib）を**人間に実行を依頼**し、
+  該当 smoke は system deps 導入後に再実行する（エージェントは sudo を実行しない）
+- ブラウザバイナリは `~/.cache/ms-playwright/`（`.venv` 外・グローバル共有、gitignore 対象外の HOME 配下）
+
+### supply chain 注記
+
+chromium バイナリは Playwright の公式 CDN（`playwright.download.prss.microsoft.com` 系）から
+取得され、その完全性検証は Playwright 自身に依存する（pip パッケージの hash 検証とは別系）。
+pip 側は `requirements-browser.txt` の major.minor 上限固定で供給を絞るが、ブラウザバイナリの
+真正性は CDN + Playwright の検証に委ねる（本 guide に記録して受容）。
