@@ -671,6 +671,42 @@ uv pip install --python .venv/bin/python -r requirements-browser.txt
   該当 smoke は system deps 導入後に再実行する（エージェントは sudo を実行しない）
 - ブラウザバイナリは `~/.cache/ms-playwright/`（`.venv` 外・グローバル共有、gitignore 対象外の HOME 配下）
 
+### smoke で実測した項目（2026-07-17、`BROWSER_EXTRACT_SMOKE=1`）
+
+`lib/service/test_browser_flow_runner.py` の smoke クラスが fixture サーバー相手に実測:
+
+- **interception**: 宣言内 origin は継続、宣言外 origin は abort + `on_block` 通知、
+  **context スコープ**なので新規タブ（`context.new_page()`）からの宣言外リクエストも捕捉
+- **service_workers='block'**: ナビゲーション後も `context.service_workers == []`
+- **teardown**: 正常終了・フロー内例外の両経路で context close + ephemeral user-data-dir 削除
+- **hard timeout**: 応答しない `/hang` への navigation が page 既定 timeout 超過 →
+  `TimeoutError` → `flow_timeout` に sanitize、udd も purge
+- **download**: fixture の Export CSV を実 download し、サーバー指定名ではなく runner 生成名で
+  spool に atomic 配置（`.part` → `os.replace`）、bytes が CSV と一致
+
+honest scoping（実測しないもの）:
+
+- **live WebSocket 拒否は実ソケットで測らない**。sync Playwright dispatcher は route
+  ハンドラ実行中に page の Promise を待つと deadlock し得るため、WS deny は
+  **mechanism テスト**（`install_interception` が context スコープで `route_web_socket("**/*")`
+  を設置することを fake context で検証、常時実行）に留める。v1 対象ツールに WS 必須のものは
+  入れない方針（§7）と整合
+- **SIGINT force-kill / data:・blob: navigation 拒否**: 前者は teardown の `finally` +
+  process 終了で構造的に担保（決定的な自動 smoke にしづらい）、後者は capability API の
+  goto が catalog origin しか構成できない構造 + `canonicalize_request_url` の scheme 拒否
+  （常時実行 unit）で担保する
+
+### canonicalize の実測知見（smoke で発覚し修正）
+
+`canonicalize_request_url` は http connector の segment 正規化を流用するが、ブラウザ特有の
+2 点を smoke が炙り出した（いずれも常時実行 unit テストで固定済み）:
+
+- **IP リテラル host**（ローカル fixture の `127.0.0.1` / `[::1]`）は IDNA エンコードできない。
+  数値ホストは IDNA を通さず素通しし、IPv6 は origin で `[...]` に包む
+- **root `/` と単一末尾スラッシュ**はブラウザが正常に発行するが http connector の segment
+  正規化は空 segment として拒否する。照合前に browser 側で吸収する（`//` 等の多重スラッシュは
+  path 混同攻撃面として拒否のまま）
+
 ### supply chain 注記
 
 chromium バイナリは Playwright の公式 CDN（`playwright.download.prss.microsoft.com` 系）から

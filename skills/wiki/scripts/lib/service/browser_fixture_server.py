@@ -211,6 +211,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._html(200, _login_html())
             return
 
+        # 応答を返さず navigation を hang させる（hard timeout smoke 用）。
+        # session 不要 — page 既定 timeout の発火を測るため認証前に置く。
+        if path == "/hang":
+            time.sleep(30)
+            self._html(200, "<h1>late</h1>")
+            return
+
         # 以降は保護ルート
         if not self._has_session():
             self._html(401, "<h1>login required</h1>")

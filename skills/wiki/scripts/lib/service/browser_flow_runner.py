@@ -19,13 +19,18 @@ AST 静的ゲート（import / exec / eval / dunder 拒否）、(3) PR レビュ
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
+import ipaddress
+import os
 import shutil
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Callable, Iterator
 
 from lib.domain.types import Err, Ok, is_err
 from lib.service.tool_connector_http import _canonicalize_segments
@@ -283,20 +288,39 @@ def canonicalize_request_url(url: str) -> Ok[CanonUrl] | Err[BrowserReason]:
     if not host:
         return Err(error=BrowserReason.ORIGIN_BLOCKED, detail="host が解決できない")
     host = host.rstrip(".").lower()
+    # IP リテラル（IPv4/IPv6）は IDNA を通さず素通しする。IDN ホスト名のみ punycode 化。
+    host_display = host
     try:
-        host = unicodedata.normalize("NFC", host).encode("idna").decode("ascii")
-    except (UnicodeError, ValueError):
-        return Err(error=BrowserReason.ORIGIN_BLOCKED, detail="host を正規化できない")
+        ip = ipaddress.ip_address(host)
+        # IPv6 は origin で `[...]` に包む（port との曖昧さを避ける）
+        host_display = f"[{host}]" if ip.version == 6 else host
+    except ValueError:
+        try:
+            host = unicodedata.normalize("NFC", host).encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return Err(
+                error=BrowserReason.ORIGIN_BLOCKED, detail="host を正規化できない"
+            )
+        host_display = host
 
     try:
         port = split.port
     except ValueError:
         return Err(error=BrowserReason.ORIGIN_BLOCKED, detail="port が不正")
-    origin = f"{split.scheme}://{host}"
+    origin = f"{split.scheme}://{host_display}"
     if port is not None and port != _DEFAULT_PORTS.get(split.scheme):
         origin = f"{origin}:{port}"
 
-    segments_result = _canonicalize_segments(split.path or "/")
+    # ブラウザは origin root "/" や単一末尾スラッシュを正常に発行する。http connector の
+    # segment 正規化はそれを空 segment として拒否するため、照合前に browser 側で吸収する
+    # （"//" 等の多重スラッシュは path 混同攻撃面として拒否したまま）。
+    raw_path = split.path or "/"
+    if raw_path == "/":
+        return Ok(value=CanonUrl(origin=origin, segments=()))
+    if raw_path.endswith("/") and not raw_path.endswith("//"):
+        raw_path = raw_path[:-1]
+
+    segments_result = _canonicalize_segments(raw_path)
     if is_err(segments_result):
         return Err(
             error=BrowserReason.ORIGIN_BLOCKED,
@@ -429,6 +453,147 @@ FIXED_TIMEZONE = "UTC"
 FIXED_VIEWPORT = {"width": 1280, "height": 900}
 
 
+def build_launch_kwargs(user_data_dir: Path) -> dict:
+    """封じ込め launch の kwargs（guide §7）。本番・smoke で同一経路を使う。
+
+    service_workers='block' / WebRTC 無効化 launch args / remote debugging port なし /
+    locale・timezone・viewport 固定 / ephemeral user-data-dir。
+
+    session state は ``launch_persistent_context`` の引数にできない（``storage_state`` は
+    ``new_context`` 専用）ため、launch 後に :func:`apply_storage_state` で復元する。
+    """
+
+    return {
+        "user_data_dir": str(user_data_dir),
+        "headless": True,
+        "args": list(CHROMIUM_LAUNCH_ARGS),
+        "service_workers": "block",
+        "locale": FIXED_LOCALE,
+        "timezone_id": FIXED_TIMEZONE,
+        "viewport": dict(FIXED_VIEWPORT),
+    }
+
+
+def apply_storage_state(context, storage_state: dict | None) -> None:
+    """session state（Playwright storage_state 形式）を persistent context に復元する。
+
+    persistent context は ``storage_state`` 引数を取れないため、cookie は
+    ``add_cookies`` で、per-origin localStorage は origin を照合する init script で
+    復元する（cookie 認証が主。localStorage 認証も best-effort で復元する）。
+    """
+
+    if not storage_state:
+        return
+    cookies = storage_state.get("cookies") or []
+    if cookies:
+        context.add_cookies(cookies)
+    for origin in storage_state.get("origins") or []:
+        origin_url = origin.get("origin")
+        items = origin.get("localStorage") or []
+        if not origin_url or not items:
+            continue
+        import json as _json
+
+        payload = _json.dumps(items)
+        script = (
+            "(() => { if (location.origin === "
+            + _json.dumps(origin_url)
+            + ") { const items = "
+            + payload
+            + "; for (const it of items) { try { "
+            "localStorage.setItem(it.name, it.value); } catch (e) {} } } })();"
+        )
+        context.add_init_script(script)
+
+
+def install_interception(
+    context,
+    rules: tuple[OriginRuleLite, ...],
+    *,
+    on_block: Callable[[], None] | None = None,
+) -> None:
+    """context スコープの request interception + WebSocket 拒否を設置する（guide §7）。
+
+    page スコープではなく ``context.route('**/*')`` で popup / 新規タブを含む全リクエストを
+    allowlist 照合し、宣言外は abort する。``on_block`` は abort ごとに呼ばれる（引数なし
+    = 実行時値を監査に載せないため。origin_blocked の事実だけを記録する）。
+    """
+
+    def _route(route, request) -> None:
+        decision = match_allowlist(
+            method=request.method,
+            url=request.url,
+            resource_type=request.resource_type,
+            rules=rules,
+        )
+        if is_err(decision):
+            if on_block is not None:
+                on_block()
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route("**/*", _route)
+    # 全 WebSocket を deny-by-default
+    try:
+        context.route_web_socket("**/*", lambda ws: ws.close())
+    except AttributeError:  # pragma: no cover - playwright < 1.48
+        pass
+
+
+@contextlib.contextmanager
+def contained_context(
+    pw,
+    *,
+    rules: tuple[OriginRuleLite, ...],
+    storage_state: dict | None = None,
+    on_block: Callable[[], None] | None = None,
+    default_timeout_ms: int = 30_000,
+    on_setup: Callable[[object, Path], None] | None = None,
+) -> Iterator[object]:
+    """封じ込め済み context を yield し、``finally`` で確実に teardown する（guide §13）。
+
+    正常終了・例外・timeout のいずれの経路でも context を close し、ephemeral
+    user-data-dir を削除する（ゾンビ chromium と udd ロック残留を許さない）。
+    ``on_setup(context, user_data_dir)`` は teardown 観測用の hook。
+    """
+
+    user_data_dir = Path(tempfile.mkdtemp(prefix="be-udd-"))
+    context = None
+    try:
+        context = pw.chromium.launch_persistent_context(
+            **build_launch_kwargs(user_data_dir)
+        )
+        context.set_default_timeout(default_timeout_ms)
+        install_interception(context, rules, on_block=on_block)
+        apply_storage_state(context, storage_state)
+        if on_setup is not None:
+            on_setup(context, user_data_dir)
+        yield context
+    finally:
+        if context is not None:
+            with contextlib.suppress(Exception):
+                context.close()
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+
+
+def save_download_atomic(download, *, spool_dir: Path, nonce: str) -> Path:
+    """download を spool 内に **runner 生成名で atomic 配置**する（guide §12）。
+
+    サーバー指定 filename（``download.suggested_filename``）は保存名に使わない。
+    まず ``.part`` へ書き出し、size/hash が確定した後に最終名へ ``os.replace``
+    （同一 dir 内で atomic rename）する。検証完了前の delivery は seal-at-prepare の
+    帰結として構造的に起きない。
+    """
+
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    tmp = spool_dir / f".dl-{nonce}.part"
+    download.save_as(str(tmp))
+    final = spool_dir / f"download-{nonce}.bin"
+    os.replace(tmp, final)
+    return final
+
+
 @dataclass(frozen=True)
 class LaunchProfile:
     """実行ごとの隔離 launch profile（ephemeral user-data-dir・fresh context）。"""
@@ -485,10 +650,20 @@ class BrowserFlowRunner(FlowExtractor):
         self._monotonic = monotonic
 
     def extract(
-        self, *, entry, params: dict, session_state: dict | None, deadline_monotonic: float
+        self,
+        *,
+        entry,
+        params: dict,
+        session_state: dict | None,
+        deadline_monotonic: float,
+        on_block: Callable[[], None] | None = None,
     ) -> "Ok[ExtractionResult] | Err[BrowserReason]":
-        # 実 chromium 実装は smoke ゲート下で検証する。ここでは封じ込め契約を
-        # 組み立てる骨格を示し、生成する成果物は ExtractionResult に封じる。
+        """フローを封じ込め context 内で実行し ExtractionResult を封じる（smoke ゲート下）。
+
+        teardown は :func:`contained_context` が保証する（正常・例外・timeout いずれも
+        close + udd 削除）。runner 境界を越える全例外は閉じた reason に sanitize する。
+        """
+
         try:
             from playwright.sync_api import sync_playwright  # 遅延 import
         except ImportError:
@@ -497,7 +672,7 @@ class BrowserFlowRunner(FlowExtractor):
                 detail="playwright 未インストール（requirements-browser.txt）",
             )
 
-        rules = _rules_from_entry(entry)
+        rules = rules_from_entry(entry)
         flow = load_flow(
             path=self._wiki_root / "tools" / "flows" / entry.flow.ref,
             expected_sha256=entry.flow.sha256,
@@ -505,33 +680,24 @@ class BrowserFlowRunner(FlowExtractor):
         if is_err(flow):
             return flow
 
-        import tempfile
-
-        user_data_dir = Path(tempfile.mkdtemp(prefix="be-udd-"))
+        # deadline を page 既定 timeout に反映（hard wall-clock 超過は TimeoutError →
+        # flow_timeout に sanitize、teardown は contained_context が保証する）
+        remaining_ms = max(1, int((deadline_monotonic - self._monotonic()) * 1000))
         try:
             with sync_playwright() as pw:
-                context = pw.chromium.launch_persistent_context(
-                    user_data_dir=str(user_data_dir),
-                    headless=True,
-                    args=list(CHROMIUM_LAUNCH_ARGS),
-                    service_workers="block",
-                    locale=FIXED_LOCALE,
-                    timezone_id=FIXED_TIMEZONE,
-                    viewport=dict(FIXED_VIEWPORT),
+                with contained_context(
+                    pw,
+                    rules=rules,
                     storage_state=session_state,
-                )
-                try:
-                    _install_interception(context, rules)
+                    on_block=on_block,
+                    default_timeout_ms=remaining_ms,
+                ) as context:
                     page = context.new_page()
                     ctx = FlowContext(page=page, entry=entry, params=params)
                     flow.value(ctx, params)
                     return Ok(value=ctx.build_result(self._clock_now()))
-                finally:
-                    context.close()
         except BaseException as exc:  # noqa: BLE001 - 境界で全例外を sanitize
             return Err(error=sanitize_exception(exc), detail="")
-        finally:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
 
     def _clock_now(self) -> str:
         from datetime import timezone
@@ -539,7 +705,7 @@ class BrowserFlowRunner(FlowExtractor):
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _rules_from_entry(entry) -> tuple[OriginRuleLite, ...]:
+def rules_from_entry(entry) -> tuple[OriginRuleLite, ...]:
     """catalog entry の origin_allowlist を account.origin で平坦化する。"""
 
     origin = entry.account.origin.rstrip("/")
@@ -552,29 +718,6 @@ def _rules_from_entry(entry) -> tuple[OriginRuleLite, ...]:
         )
         for r in entry.origin_allowlist
     )
-
-
-def _install_interception(context, rules: tuple[OriginRuleLite, ...]) -> None:  # pragma: no cover - smoke
-    """context スコープの request interception + WebSocket 拒否を設置する。"""
-
-    def _route(route, request) -> None:
-        decision = match_allowlist(
-            method=request.method,
-            url=request.url,
-            resource_type=request.resource_type,
-            rules=rules,
-        )
-        if is_err(decision):
-            route.abort()
-        else:
-            route.continue_()
-
-    context.route("**/*", _route)
-    # 全 WebSocket を deny-by-default
-    try:
-        context.route_web_socket("**/*", lambda ws: ws.close())
-    except AttributeError:
-        pass  # playwright < 1.48（requirements で下限を固定）
 
 
 class FlowContext:  # pragma: no cover - smoke（capability API は実 page を包む）
