@@ -9,15 +9,15 @@ description: >
 
 Wiki の知識に基づいて質問に回答する。一般知識ではなく Wiki を情報源とする。
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](skills/wiki/references/paths.md) を参照。
+**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](../wiki/references/paths.md) を参照。
 
 ## プロセス
 
 1. **候補選定（retrieval pre-pass）**: 質問からキーワードを抽出し（日本語・英語の両方が考えられる場合は両方入れる）:
    ```bash
-   python3 skills/wiki/scripts/query_retrieve.py --wiki-root {wiki_root} --keywords <kw1> <kw2> ...
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/query_retrieve.py --wiki-root {wiki_root} --keywords <kw1> <kw2> ...
    ```
-   graph layer と Trust Score を消費した候補リスト（スコア・trust・選定理由つき）が返る。`outputs/graph.json` が無い場合は exit 2 で停止するので、先に `python3 skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}` を実行してから `query_retrieve.py` を再実行する
+   graph layer と Trust Score を消費した候補リスト（スコア・trust・選定理由つき）が返る。`outputs/graph.json` が無い場合は exit 2 で停止するので、先に `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}` を実行してから `query_retrieve.py` を再実行する
 2. **関連記事を読む**: 候補リストの上位から、回答の正確性が上がるものだけを選んで全文読み込む。候補外の記事が必要なら `{wiki_root}/index.md` から補ってよい
 3. **回答合成**:
    - 主張には必ず `[[slug]]` で出典を付ける
@@ -33,7 +33,7 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
 
 ユーザが保存を承認した場合:
 1. `{wiki_root}/concepts/{slug}.md` に記事として保存（`tags: [query, synthesis]`）
-2. [post-processing.md](skills/wiki/references/post-processing.md) に従い後処理（Backlink Audit → index/AGENTS.md 更新 → wikilink rendering → log_append promote）
+2. [post-processing.md](../wiki/references/post-processing.md) に従い後処理（Backlink Audit → index/AGENTS.md 更新 → wikilink rendering → log_append promote）
 
 保存しない場合:
 1. `{wiki_root}/outputs/queries/{YYYYMMDD}-{slug}.md` に回答を保存
@@ -53,13 +53,13 @@ Wiki の知識に基づいて質問に回答する。一般知識ではなく Wi
    ```
 2. `log.md` に追記:
    ```bash
-   python3 skills/wiki/scripts/log_append.py query --wiki-root {wiki_root} --summary "{question summary}"
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py query --wiki-root {wiki_root} --summary "{question summary}"
    ```
 
 ## QueryLog 追記（保存判断の後に必ず実行）
 
 ```bash
-python3 skills/wiki/scripts/querylog_append.py --wiki-root {wiki_root} \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/querylog_append.py --wiki-root {wiki_root} \
   --question "{ユーザの元の質問文}" \
   --consulted concepts/{slug1}.md concepts/{slug2}.md \
   --answer-file {保存した回答ファイルのパス} \

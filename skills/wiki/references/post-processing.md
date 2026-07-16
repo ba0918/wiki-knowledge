@@ -17,7 +17,7 @@ compile と query(promote) の両方で使用する後処理手順。
 ## wikilink rendering
 
 ```bash
-python3 skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/
 ```
 
 `[[slug]]` を GitHub Web UI で踏める `[[slug]] ([↗](slug.md))` 形式に併記する（idempotent）。
@@ -30,11 +30,11 @@ python3 skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/
 
 ```bash
 # compile
-python3 skills/wiki/scripts/log_append.py compile --wiki-root {wiki_root} --title "{Title}" --word-count {N} --sources {N}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py compile --wiki-root {wiki_root} --title "{Title}" --word-count {N} --sources {N}
 
 # promote
-python3 skills/wiki/scripts/log_append.py promote --wiki-root {wiki_root} --title "{Title}"
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py promote --wiki-root {wiki_root} --title "{Title}"
 
 # discover
-python3 skills/wiki/scripts/log_append.py discover --wiki-root {wiki_root} --slug {slug} --articles N
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py discover --wiki-root {wiki_root} --slug {slug} --articles N
 ```

@@ -24,8 +24,10 @@ AGENTS.md → wiki_root: .wiki（デフォルト）
 
 ## スクリプトパス
 
-全スキルでプロジェクトルート基準のパスを使用する:
+スクリプト・テンプレートはプラグイン本体に同梱されている。全スキルで `${CLAUDE_PLUGIN_ROOT}`（プラグインのインストール先ルートを指す環境変数）基準のパスを使用する:
 
 ```bash
-python3 skills/wiki/scripts/xxx.py --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/xxx.py --wiki-root {wiki_root}
 ```
+
+`${CLAUDE_PLUGIN_ROOT}` が未設定の場合（プラグイン経由でなく、このリポジトリ自体を開いて開発しているとき）は、リポジトリルートからの相対パス `skills/wiki/scripts/xxx.py` を使う。

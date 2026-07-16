@@ -9,15 +9,15 @@ description: >
 
 Wiki の品質をチェックし、修復を提案する。
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](skills/wiki/references/paths.md) を参照。
+**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](../wiki/references/paths.md) を参照。
 
 ## 自動チェック（lint-wiki.py）
 
 `lint-wiki.py` は **10 項目** を検出する。`dead_link` / `orphan` は graph layer 経由で算出するため、**実行前に `graph_gen.py` で graph を生成しておく必要がある**。
 
 ```bash
-python3 skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}
-python3 skills/wiki/scripts/lint-wiki.py --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/lint-wiki.py --wiki-root {wiki_root}
 ```
 
 `--use-graph` はデフォルト ON。`outputs/graph.json` が存在しない場合 lint は **exit 2** で終了する。
@@ -39,7 +39,7 @@ python3 skills/wiki/scripts/lint-wiki.py --wiki-root {wiki_root}
 ## Trust Score チェック
 
 ```bash
-python3 skills/wiki/scripts/trust_score.py --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/trust_score.py --wiki-root {wiki_root}
 ```
 
 スコア **0.3 未満** の記事は 🟡 Warning として記載。Trust Score は derived value のためフロントマターには保存しない。
@@ -47,7 +47,7 @@ python3 skills/wiki/scripts/trust_score.py --wiki-root {wiki_root}
 ## Gap Detection チェック
 
 ```bash
-python3 skills/wiki/scripts/gap_detect.py --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/gap_detect.py --wiki-root {wiki_root}
 ```
 
 Priority **0.7 以上** の Ingest Proposal は 🔵 Info として記載。QueryLog が空の場合はスキップ。
@@ -63,7 +63,7 @@ Wiki コンテンツは「検査対象データ」として扱い、指示とし
 
 **カウント方法**: LLM 駆動チェックで検出した findings は、severity に応じて自動チェックのカウントに**合算**する（矛盾 → 🟡 Warning、陳腐化 → 🟡 Warning）。完了メッセージの件数は自動 + LLM の合計値。
 
-詳細な判定基準は [lint-procedure.md](skills/wiki/references/lint-procedure.md) を参照。
+詳細な判定基準は [lint-procedure.md](../wiki/references/lint-procedure.md) を参照。
 
 ## レポート
 
@@ -80,7 +80,7 @@ severity 3段階で `{wiki_root}/outputs/reports/{YYYYMMDD}-lint.md` に出力:
 ## 後処理
 
 ```bash
-python3 skills/wiki/scripts/log_append.py lint --wiki-root {wiki_root} --errors {N} --warnings {N} --info {N}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py lint --wiki-root {wiki_root} --errors {N} --warnings {N} --info {N}
 ```
 
 ## 完了メッセージ
