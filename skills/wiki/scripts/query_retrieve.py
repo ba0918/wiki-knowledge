@@ -19,7 +19,7 @@ Exit codes:
 
 Design: pure core (score_seeds / expand_via_graph / rank_candidates) + thin
 CLI, following the graph_gen.py / lint-wiki.py precedent. Retrieval design
-rationale: docs/plans/20260707200608_query-derived-layer-consumer.md
+rationale: query consumes graph.json + Trust Score v2 (absolute-scale, 2026-07-07)
 """
 
 from __future__ import annotations

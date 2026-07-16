@@ -7,7 +7,7 @@ Usage:
 Trust Score v2 is a weighted sum of 4 factors, each an **absolute** score in
 0.0-1.0 (v1's min-max normalization made scores relative to the rest of the
 wiki, which broke the absolute 0.30 warning threshold — in a uniform wiki
-someone always sank to 0; see docs/plans/20260707200608):
+someone always sank to 0; fixed in v2, 2026-07-07):
 
   - Source count   (0.30)  saturating n/(n+1): 1=0.50, 2=0.67, 3=0.75
   - Freshness      (0.20)  half-life decay 0.5**(days/365): 1y=0.50, 2y=0.25

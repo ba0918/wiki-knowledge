@@ -112,7 +112,7 @@ lint-wiki.py（[[gap-detection]] / [[trust-score]] は将来）
 - **inventory.json 中間層**で二重管理を回避
 - **graph_gen.py が graph.json を所有**（compile は LLM 呼び出しに専念、lint は consumer に徹する）
 
-実装計画は `docs/plans/20260407183028_wiki-graph-layer-mvp.md` を参照。
+実装は graph_gen.py（compile → graph_gen → lint の3相パイプライン）として完了済み。
 
 ## 設計上の学び
 

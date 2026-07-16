@@ -14,7 +14,6 @@ The public surface of this package is:
   concrete migration, implementing ``.wiki/schema/migrations/v0-to-v1.md``.
 
 The Phase 0.11 CLI handler ``skills/wiki/scripts/migrate.py`` composes these
-pieces — it contains no business logic of its own. See the plan at
-``docs/plans/20260408163658_source-agnostic-knowledge-pipeline.md`` for the
-full phase layout.
+pieces — it contains no business logic of its own. Part of the
+Source-Agnostic Knowledge Pipeline (currently standby; v0 is schema-of-record).
 """

@@ -23,7 +23,7 @@
     "schema_version": {
       "type": "integer",
       "const": 1,
-      "description": "Wiki schema version. v1 is the initial schema introduced by the Source-Agnostic Knowledge Pipeline (docs/plans/20260408163658)."
+      "description": "Wiki schema version. v1 was designed for the Source-Agnostic Knowledge Pipeline but is currently standby (v0 is schema-of-record)."
     },
     "article_id": {
       "type": "string",

@@ -6,7 +6,7 @@ clone directory now exists"). Smoke tests at the bottom use the real
 :class:`SubprocessRunner` against throwaway git repositories under
 ``tmp_path`` — no network access is required.
 
-Security mapping (docs/plans/20260703224551_repo-ingest-mvp.md):
+Security mapping (repo-ingest MVP, 2026-07-03):
 
 * C-2  GIT_ALLOW_PROTOCOL=https:ssh:git on both ghq and git paths,
        plus ``-c protocol.ext.allow=never`` on the fallback clone

@@ -5,7 +5,7 @@ owns the repo-MVP-specific types (``RepoSource`` / ``DocCandidate`` /
 ``RepoManifest``) so that ``lib/domain/types.py`` (pipeline v1 schema) stays
 untouched.
 
-Security mapping (docs/plans/20260703224551_repo-ingest-mvp.md):
+Security mapping (repo-ingest MVP, 2026-07-03):
 
 * **C-1** ``parse_repo_source`` is a positive-match allowlist. Only four
   input shapes are accepted: ``https://`` URLs, ``ssh://`` URLs, scp-like

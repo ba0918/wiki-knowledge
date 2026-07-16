@@ -57,7 +57,7 @@ tags: [ripgrep, docs]
 | `source_revision` | `revision`（確定 — `lib/domain/types.py` の `Source.revision` / `page-template-v1.json` に追加済み） |
 | `source_path` | `extensions["repo"]["source_path"]`（予約 namespace） |
 
-なお v1 スキーマ自体は未採用（v0 が schema-of-record）。裁定と採用トリガーは `docs/plans/20260707194819_schema-regime-decision.md` を参照。
+なお v1 スキーマ自体は未採用（v0 が schema-of-record）。採用トリガー: concepts/ に再導出不能な状態を書き込む最初の機能と同一サイクルで v1 migration を実施する。
 
 ## Query 出力（outputs/queries/*.md）
 

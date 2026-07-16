@@ -74,7 +74,7 @@ Wiki 内のパスは全て `{wiki_root}` からの相対パス。
 
 ## Schema 体制（v0 = schema-of-record / v1 = standby）
 
-裁定の全文と根拠: `docs/plans/20260707194819_schema-regime-decision.md`
+裁定（2026-07-07）: v0 を schema-of-record と正式宣言。v1 は「concepts/ に再導出不能な状態を書き込む最初の機能」が来るまで standby。5リポジトリ実適用は v0 で進めてよい。
 
 - **v0（`{wiki_root}/schema/page-template.json`）が schema-of-record。** 全記事・全消費側スクリプト・compile 手順・wiki-init テンプレートは v0 に準拠する
 - **v1（`page-template-v1.json` + `lib/` の Article 集約・migrations 一式）は採用トリガー付きの standby 資産。** 削除しない。ただし新規記事に使わない

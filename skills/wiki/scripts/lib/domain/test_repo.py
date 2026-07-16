@@ -1,7 +1,7 @@
 """Unit tests for lib/domain/repo.py (repo ingest MVP — pure domain layer).
 
 Covers the Security Considerations table of the plan
-(docs/plans/20260703224551_repo-ingest-mvp.md):
+(repo-ingest MVP, 2026-07-03):
 
 * C-1  positive-match allowlist (https:// / ssh:// / git@host:path / local)
 * H-3  userinfo removal + ``removed_userinfo`` flag

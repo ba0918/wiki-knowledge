@@ -1019,7 +1019,7 @@ class TestCheckIndexSync:
 
 # ===========================================================================
 # schema_version guard — v1 article mixed into the v0 wiki
-# (schema regime decision: docs/plans/20260707194819_schema-regime-decision.md)
+# (schema regime: v0 is schema-of-record, v1 is standby until adoption trigger)
 # ===========================================================================
 
 V1_ARTICLE_FM = textwrap.dedent("""\
@@ -1056,7 +1056,7 @@ class TestSchemaVersionGuard:
         assert len(guard) == 1
         assert guard[0].severity == "error"
         assert guard[0].slug == "v1-sample"
-        assert "schema-regime-decision" in guard[0].message
+        assert "v1 adoption requires non-re-derivable state" in guard[0].message
         # No v0-format cascade for the v1 article
         others = [
             f for f in findings

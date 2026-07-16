@@ -411,8 +411,8 @@ def _check_format(
 
         # v1 (schema_version) article mixed into the v0 wiki: emit a single
         # actionable error instead of a cascade of v0-format violations.
-        # v0 is the schema-of-record until the adoption trigger fires
-        # (docs/plans/20260707194819_schema-regime-decision.md).
+        # v0 is the schema-of-record until concepts/ gains non-re-derivable
+        # state (review resolve, claim arbitration, etc.).
         if "schema_version" in fm:
             findings.append(Finding(
                 severity="error",
@@ -421,7 +421,7 @@ def _check_format(
                 message=(
                     f"{slug}: has schema_version={fm['schema_version']!r} but v0 is "
                     "the schema-of-record — v1 is not adopted yet "
-                    "(see docs/plans/20260707194819_schema-regime-decision.md)"
+                    "(v0 is schema-of-record; v1 adoption requires non-re-derivable state in concepts/)"
                 ),
                 details={"schema_version": fm["schema_version"]},
             ))

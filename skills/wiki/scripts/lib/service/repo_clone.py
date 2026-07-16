@@ -13,7 +13,7 @@ Flow (composed by the CLI handler, ``repo_ingest.py``)::
            -> discover_docs / build_manifest (pure)
       -> write_repo_inventory (I/O)   this module
 
-Security mapping (docs/plans/20260703224551_repo-ingest-mvp.md):
+Security mapping (repo-ingest MVP, 2026-07-03):
 
 * **C-2** every clone subprocess runs with ``GIT_ALLOW_PROTOCOL=https:ssh:git``
   (ghq execs git internally, so the env var covers both routes); the git
