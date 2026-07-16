@@ -1,0 +1,378 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Browser Extract Catalog",
+  "description": "wiki-browser-extract 別系統の実行契約の真実源。固定フローコード（flow.ref + SHA-256 pin）・auth profile・origin allowlist（method + path prefix + resource type）・tier + 保証マトリクス・閉じた検証語彙による検証契約・limits・保持ポリシー・delivery 先を git 管理 JSON で宣言する。実行時検証は skills/wiki/scripts/lib/domain/browser_contract.py の hand-rolled validator が担い、本 schema との構造制約同期は test_browser_contract.py が機械検証する。相関制約（B1 は独立 anchor 最低1つ / guarantees と tier の整合 / login_origins は human-assisted・form 系のみ）は draft-07 の if/then で表現しきれず validator が真実源として所有する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tools"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/tool_browser"
+      }
+    }
+  },
+  "definitions": {
+    "tool_browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "type",
+        "flow",
+        "auth",
+        "origin_allowlist",
+        "tier",
+        "guarantees",
+        "checks",
+        "params_schema",
+        "limits",
+        "retention",
+        "delivery",
+        "account"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+        },
+        "type": {
+          "const": "browser"
+        },
+        "flow": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "固定フローコード参照 + 内容 SHA-256 pin。実行時に flows/{ref} を読み hash 照合し、不一致は flow_pin_mismatch で実行拒否する（実行時に git を照会しない）。",
+          "required": [
+            "ref",
+            "sha256"
+          ],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]*\\.py$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile"
+          ],
+          "properties": {
+            "profile": {
+              "enum": [
+                "none",
+                "form",
+                "form+totp",
+                "human-assisted"
+              ]
+            },
+            "credential_ref": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+            },
+            "session_ttl_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 720
+            },
+            "login_origins": {
+              "type": "array",
+              "description": "ログイン中のみ有効な追加 origin allowlist（SSO/IdP/captcha/CDN 跨ぎ用）。抽出フェーズの origin_allowlist とは分離し login サブコマンド・form login 手続き中のみ併用する。",
+              "items": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            }
+          }
+        },
+        "origin_allowlist": {
+          "type": "array",
+          "minItems": 1,
+          "description": "宣言外通信をブロックする第二防御線。method + path prefix + resource type 粒度（origin 単位にしない）。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "method",
+              "path_prefix",
+              "resource_type"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "DELETE",
+                  "HEAD"
+                ]
+              },
+              "path_prefix": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "resource_type": {
+                "enum": [
+                  "document",
+                  "xhr",
+                  "fetch",
+                  "script",
+                  "stylesheet",
+                  "image",
+                  "font",
+                  "media",
+                  "other"
+                ]
+              },
+              "state_changing": {
+                "type": "boolean",
+                "description": "true の状態変更リクエスト（login / TOTP / export job 作成等）は catalog 明示宣言としてのみ許可される。"
+              }
+            }
+          }
+        },
+        "tier": {
+          "enum": [
+            "B1",
+            "B2",
+            "B3"
+          ]
+        },
+        "guarantees": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "tier ごとの保証有無マトリクス（機械可読）。manifest・監査にも未保証事項として出力する。",
+          "required": [
+            "integrity",
+            "identity",
+            "filter_correctness",
+            "completeness",
+            "human_verification"
+          ],
+          "properties": {
+            "integrity": {
+              "enum": [
+                "guaranteed",
+                "partial",
+                "none"
+              ]
+            },
+            "identity": {
+              "enum": [
+                "guaranteed",
+                "partial",
+                "none"
+              ]
+            },
+            "filter_correctness": {
+              "enum": [
+                "guaranteed",
+                "partial",
+                "none"
+              ]
+            },
+            "completeness": {
+              "enum": [
+                "guaranteed",
+                "partial",
+                "none"
+              ]
+            },
+            "human_verification": {
+              "enum": [
+                "required",
+                "none"
+              ]
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "description": "閉じた検証語彙による検証契約。B1 は独立 anchor（export_metadata_match / ui_total_vs_file_rows / tenant_id_match / primary_key_unique）を最低1つ含む必要がある（validator が強制）。",
+          "items": {
+            "$ref": "#/definitions/check"
+          }
+        },
+        "params_schema": {
+          "type": "object",
+          "description": "LLM が注入するパラメータの schema。browser-extract-params-schema.json（meta-schema）に準拠し、各パラメータは enum/pattern/maxLength のいずれかで制約される。"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_rows",
+            "max_result_bytes",
+            "max_cell_bytes",
+            "max_artifact_bytes",
+            "max_flow_seconds",
+            "max_unapproved_bundles"
+          ],
+          "properties": {
+            "max_rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456
+            },
+            "max_cell_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "max_artifact_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456
+            },
+            "max_flow_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "max_unapproved_bundles": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "trace",
+            "screenshot",
+            "ttl_hours"
+          ],
+          "properties": {
+            "trace": {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            "screenshot": {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            "ttl_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 720
+            }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed_dirs"
+          ],
+          "properties": {
+            "allowed_dirs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "account": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "session state を束縛する専用最小権限アカウント宣言（tool / origin / account）。汎用ブラウザ profile の持込み・profile の tool 間共有を禁止する。",
+          "required": [
+            "id",
+            "origin"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "origin": {
+              "type": "string",
+              "pattern": "^https?://"
+            }
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check"
+      ],
+      "properties": {
+        "check": {
+          "enum": [
+            "filter_readback",
+            "row_count_range",
+            "selector_exists",
+            "export_metadata_match",
+            "ui_total_vs_file_rows",
+            "tenant_id_match",
+            "primary_key_unique",
+            "artifact_hash",
+            "screen_fingerprint"
+          ]
+        },
+        "param": {
+          "type": "string",
+          "description": "filter_readback / tenant_id_match 等が参照する params キー名"
+        },
+        "column": {
+          "type": "string",
+          "description": "primary_key_unique / tenant_id_match 等が対象にする抽出列名"
+        },
+        "selector_role": {
+          "type": "string",
+          "description": "selector_exists / ui_total_vs_file_rows が使う role"
+        },
+        "selector_name": {
+          "type": "string",
+          "description": "selector_exists / ui_total_vs_file_rows が使う accessible name"
+        },
+        "min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_value": {
+          "type": "string",
+          "description": "tenant_id_match の期待 tenant/account ID（catalog account.id と照合）"
+        }
+      }
+    }
+  }
+}

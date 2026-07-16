@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Browser Extract Params Meta-Schema",
+  "description": "browser tool の params_schema（LLM が注入するパラメータの型宣言）が満たすべき meta-schema。セレクタ注入・自由文字列注入を防ぐため、各パラメータに enum / pattern / maxLength のいずれかを必須化し、params オブジェクトは additionalProperties:false を宣言させる。selector / JS / 任意 URL / 任意 path を型として提供しない。実行時検証は browser_contract.py が真実源で、本 meta-schema との同期は test_browser_contract.py が機械検証する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "properties",
+    "additionalProperties"
+  ],
+  "properties": {
+    "type": {
+      "const": "object"
+    },
+    "additionalProperties": {
+      "const": false
+    },
+    "required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "description": "1 パラメータの型宣言。enum / pattern / maxLength のいずれかで値空間を有界にすること（自由文字列を既定で許さない）。",
+        "anyOf": [
+          {
+            "required": [
+              "enum"
+            ]
+          },
+          {
+            "required": [
+              "pattern"
+            ]
+          },
+          {
+            "required": [
+              "maxLength"
+            ]
+          }
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "enum": {
+            "type": "array",
+            "minItems": 1
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minLength": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
