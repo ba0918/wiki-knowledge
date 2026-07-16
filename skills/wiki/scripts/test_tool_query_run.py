@@ -620,3 +620,307 @@ class TestCredentialIsolation:
         assert code == 1
         captured = capsys.readouterr()
         self._assert_no_secret(wiki_root, captured)
+
+
+# ---------------------------------------------------------------------------
+# http tool の CLI 面（--request-file / --count-request / request_digest 表示）
+# ---------------------------------------------------------------------------
+
+from lib.service.clock import SystemClock  # noqa: E402
+from lib.service.file_lock import RealFileLock  # noqa: E402
+from lib.service.tool_connector_registry import default_registry  # noqa: E402
+from lib.service.tool_query_runner import ToolQueryRunner  # noqa: E402
+from lib.service.test_tool_query_runner import (  # noqa: E402
+    http_transport,
+    make_http_wiki,
+    write_http_specs,
+)
+
+
+def _http_prepare_args(wiki_root: Path, main: Path, count: Path) -> list[str]:
+    return [
+        "prepare",
+        "--wiki-root",
+        str(wiki_root),
+        "--tool",
+        "redash-api",
+        "--request-file",
+        str(main),
+        "--count-request",
+        f"全件={count}",
+        "--key-columns",
+        "user_id",
+        "--expected-rows",
+        "2:2",
+        "--deliver-to",
+        "deliveries",
+    ]
+
+
+def _patch_http_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI が組む runner に fake transport の registry を差し込む。"""
+
+    def build(wiki_root: str) -> ToolQueryRunner:
+        return ToolQueryRunner(
+            wiki_root=Path(wiki_root),
+            clock=SystemClock(),
+            lock=RealFileLock(),
+            registry=default_registry(http_transport=http_transport()),
+        )
+
+    monkeypatch.setattr(tool_query_run, "_build_runner", build)
+
+
+class TestHttpCli:
+    def test_sql_file_on_http_tool_is_guided_to_request_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        main, counts = write_http_specs(tmp_path)
+        code = tool_query_run.main(
+            [
+                "prepare",
+                "--wiki-root",
+                str(wiki_root),
+                "--tool",
+                "redash-api",
+                "--sql-file",
+                str(main),
+                "--count-sql",
+                f"全件={counts[0].path}",
+                "--key-columns",
+                "user_id",
+                "--expected-rows",
+                "2:2",
+                "--deliver-to",
+                "deliveries",
+            ]
+        )
+        assert code == 2
+        assert "--request-file" in capsys.readouterr().err
+
+    def test_request_file_on_sql_tool_is_guided_to_sql_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        wiki_root = make_wiki(tmp_path)
+        main, counts = write_http_specs(tmp_path)
+        code = tool_query_run.main(
+            [
+                "prepare",
+                "--wiki-root",
+                str(wiki_root),
+                "--tool",
+                "events-db",
+                "--request-file",
+                str(main),
+                "--count-request",
+                f"全件={counts[0].path}",
+                "--key-columns",
+                "user_id",
+                "--expected-rows",
+                "2:2",
+                "--deliver-to",
+                "deliveries",
+            ]
+        )
+        assert code == 2
+        assert "--sql-file" in capsys.readouterr().err
+
+    def test_missing_payload_flags_is_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        wiki_root = make_wiki(tmp_path)
+        code = tool_query_run.main(
+            [
+                "prepare",
+                "--wiki-root",
+                str(wiki_root),
+                "--tool",
+                "events-db",
+                "--key-columns",
+                "user_id",
+                "--expected-rows",
+                "2:2",
+                "--deliver-to",
+                "deliveries",
+            ]
+        )
+        assert code == 2
+
+    def test_http_prepare_displays_request_digest(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        main, counts = write_http_specs(tmp_path)
+        _patch_http_runner(monkeypatch)
+        code = tool_query_run.main(
+            _http_prepare_args(wiki_root, main, counts[0].path)
+            + ["--format", "json"]
+        )
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        payload = json.loads(captured.out)
+        # bundle 内部 field は Phase A 互換の sql_digest を維持しつつ、
+        # http では中立な request_digest を alias として併記する
+        assert payload["request_digest"] == payload["sql_digest"]
+
+    def test_http_prepare_table_output_labels_request_digest(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        main, counts = write_http_specs(tmp_path)
+        _patch_http_runner(monkeypatch)
+        code = tool_query_run.main(_http_prepare_args(wiki_root, main, counts[0].path))
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        assert "request_digest:" in captured.out
+        assert "sql_digest:" not in captured.out
+
+    def test_http_approve_preview_labels_request_digest(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        main, counts = write_http_specs(tmp_path)
+        _patch_http_runner(monkeypatch)
+        code = tool_query_run.main(
+            _http_prepare_args(wiki_root, main, counts[0].path)
+            + ["--format", "json"]
+        )
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        plan_id = json.loads(captured.out)["plan_id"]
+        monkeypatch.setattr(sys, "stdin", FakeTty("no\n"))
+        code = tool_query_run.main(
+            [
+                "approve",
+                "--wiki-root",
+                str(wiki_root),
+                "--plan",
+                plan_id,
+                "--approved-by",
+                "mizumi",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert code == 1  # 未承認終了
+        assert "request_digest:" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# doctor サブコマンド
+# ---------------------------------------------------------------------------
+
+from lib.service.tool_connector_pg import FakePgDriver  # noqa: E402
+from lib.service.tool_doctor import Doctor  # noqa: E402
+from lib.service.test_tool_doctor import (  # noqa: E402
+    make_wiki as make_doctor_wiki,
+    pg_healthy_script,
+    pg_tool,
+)
+
+
+def _patch_doctor(monkeypatch: pytest.MonkeyPatch, driver: FakePgDriver) -> None:
+    from lib.service.clock import SystemClock
+    from lib.service.file_lock import RealFileLock
+    from lib.service.tool_connector_registry import default_registry
+
+    def build(wiki_root: str) -> Doctor:
+        return Doctor(
+            wiki_root=Path(wiki_root),
+            clock=SystemClock(),
+            lock=RealFileLock(),
+            registry=default_registry(pg_driver=driver),
+        )
+
+    monkeypatch.setattr(tool_query_run, "_build_doctor", build)
+
+
+class TestDoctorCli:
+    def test_healthy_pg_exits_zero_table(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_doctor_wiki(tmp_path, [pg_tool()])
+        _patch_doctor(monkeypatch, FakePgDriver(script=pg_healthy_script()))
+        code = tool_query_run.main(
+            ["doctor", "--wiki-root", str(wiki_root)]
+        )
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        # 固定列と status が表示される
+        assert "session_readonly" in captured.out
+        assert "OK" in captured.out
+        # SKIP summary が出る（無言で流さない）
+        assert "SKIP" in captured.out
+
+    def test_ng_exits_one(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_doctor_wiki(tmp_path, [pg_tool()])
+        script = pg_healthy_script()
+        script["SELECT current_setting('transaction_read_only')"] = (
+            ("current_setting",),
+            [("off",)],
+        )
+        _patch_doctor(monkeypatch, FakePgDriver(script=script))
+        code = tool_query_run.main(["doctor", "--wiki-root", str(wiki_root)])
+        assert code == 1
+
+    def test_json_format(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_doctor_wiki(tmp_path, [pg_tool()])
+        _patch_doctor(monkeypatch, FakePgDriver(script=pg_healthy_script()))
+        code = tool_query_run.main(
+            ["doctor", "--wiki-root", str(wiki_root), "--format", "json"]
+        )
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        payload = json.loads(captured.out)
+        assert payload["diagnoses"][0]["tool_id"] == "pg-db"
+        rows = payload["diagnoses"][0]["checks"]
+        assert any(r["check"] == "session_readonly" and r["status"] == "ok" for r in rows)
+        assert "skip_summary" in payload
+
+    def test_unknown_tool_is_usage_error(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_doctor_wiki(tmp_path, [pg_tool()])
+        _patch_doctor(monkeypatch, FakePgDriver(script=pg_healthy_script()))
+        code = tool_query_run.main(
+            ["doctor", "--wiki-root", str(wiki_root), "--tool", "no-such"]
+        )
+        assert code == 2
+
+    def test_credential_value_absent_from_output(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wiki_root = make_doctor_wiki(tmp_path, [pg_tool()])
+        _patch_doctor(monkeypatch, FakePgDriver(script=pg_healthy_script()))
+        tool_query_run.main(["doctor", "--wiki-root", str(wiki_root)])
+        captured = capsys.readouterr()
+        assert "pg-secret" not in captured.out
+        assert "pg-secret" not in captured.err

@@ -33,10 +33,11 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from lib.domain.tool_query import RejectReason
-from lib.domain.types import is_err
+from lib.domain.types import is_err, is_ok
 from lib.service.clock import SystemClock
 from lib.service.file_lock import RealFileLock
-from lib.service.tool_catalog import load_catalog
+from lib.service.tool_catalog import load_catalog, resolve_entry
+from lib.service.tool_doctor import CheckStatus, Doctor, DoctorError
 from lib.service.tool_query_runner import CountSql, RunnerReason, ToolQueryRunner
 
 
@@ -69,6 +70,24 @@ def _build_runner(wiki_root: str) -> ToolQueryRunner:
         clock=SystemClock(),
         lock=RealFileLock(),
     )
+
+
+def _build_doctor(wiki_root: str) -> Doctor:
+    return Doctor(
+        wiki_root=Path(wiki_root),
+        clock=SystemClock(),
+        lock=RealFileLock(),
+    )
+
+
+def _entry_type(wiki_root: str, tool_id: str) -> str | None:
+    """CLI 表示・flag 検証用の type 参照（失敗時は None — 実行時検証は runner）。"""
+
+    catalog = load_catalog(wiki_root=Path(wiki_root))
+    if is_err(catalog):
+        return None
+    entry = resolve_entry(catalog.value, tool_id)
+    return entry.value.type if is_ok(entry) else None
 
 
 # ---------------------------------------------------------------------------
@@ -129,13 +148,66 @@ def _funnel_lines(funnel) -> list[str]:
     return [f"  {step.label}: {step.row_count} 件" for step in funnel]
 
 
+def _resolve_prepare_payload(
+    args: argparse.Namespace,
+) -> tuple[Path, list[CountSql]] | int:
+    """tool type と payload flag（SQL 系 / http 系）の整合を検証して解決する。
+
+    catalog が読めない・tool が未知の場合は type 不明として SQL 系 flag を
+    そのまま通し、実行時検証（runner）に委ねる。
+    """
+
+    tool_type = _entry_type(args.wiki_root, args.tool)
+    is_http = tool_type == "http"
+    has_sql = args.sql_file is not None or args.count_sql
+    has_request = args.request_file is not None or args.count_request
+
+    if is_http:
+        if has_sql:
+            print(
+                "error: http tool では --request-file / --count-request を"
+                "使ってください（SQL ではなく request spec を渡す）",
+                file=sys.stderr,
+            )
+            return 2
+        if args.request_file is None or not args.count_request:
+            print(
+                "error: http tool には --request-file と --count-request が必要です",
+                file=sys.stderr,
+            )
+            return 2
+        return Path(args.request_file), list(args.count_request)
+
+    if has_request:
+        print(
+            "error: --request-file / --count-request は http tool 専用です"
+            "（SQL 系 tool では --sql-file / --count-sql を使用）",
+            file=sys.stderr,
+        )
+        return 2
+    if args.sql_file is None or not args.count_sql:
+        print(
+            "error: --sql-file と --count-sql が必要です",
+            file=sys.stderr,
+        )
+        return 2
+    return Path(args.sql_file), list(args.count_sql)
+
+
 def _cmd_prepare(args: argparse.Namespace) -> int:
+    payload = _resolve_prepare_payload(args)
+    if isinstance(payload, int):
+        return payload
+    sql_path, count_sqls = payload
+    is_http = _entry_type(args.wiki_root, args.tool) == "http"
+    digest_label = "request_digest" if is_http else "sql_digest"
+
     _progress("catalog 検証 → 接続 → ファネル COUNT 実行 → bundle 生成")
     runner = _build_runner(args.wiki_root)
     result = runner.prepare(
         tool_id=args.tool,
-        sql_path=Path(args.sql_file),
-        count_sqls=args.count_sql,
+        sql_path=sql_path,
+        count_sqls=count_sqls,
         key_columns=tuple(args.key_columns),
         expected_rows=args.expected_rows,
         deliver_to=args.deliver_to,
@@ -144,27 +216,27 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
         return _fail(result)
     outcome = result.value
     if args.format == "json":
-        print(
-            json.dumps(
-                {
-                    "plan_id": outcome.plan_id,
-                    "tool_id": outcome.tool_id,
-                    "funnel": [
-                        {"label": s.label, "row_count": s.row_count}
-                        for s in outcome.funnel
-                    ],
-                    "sql_digest": outcome.sql_digest,
-                    "sql_display_digest": outcome.sql_display_digest,
-                    "expected_rows": {
-                        "min": outcome.expected_rows[0],
-                        "max": outcome.expected_rows[1],
-                    },
-                    "delivery_dir": outcome.delivery_dir,
-                    "expires_at": outcome.expires_at,
-                },
-                ensure_ascii=False,
-            )
-        )
+        payload_json = {
+            "plan_id": outcome.plan_id,
+            "tool_id": outcome.tool_id,
+            "funnel": [
+                {"label": s.label, "row_count": s.row_count}
+                for s in outcome.funnel
+            ],
+            "sql_digest": outcome.sql_digest,
+            "sql_display_digest": outcome.sql_display_digest,
+            "expected_rows": {
+                "min": outcome.expected_rows[0],
+                "max": outcome.expected_rows[1],
+            },
+            "delivery_dir": outcome.delivery_dir,
+            "expires_at": outcome.expires_at,
+        }
+        if is_http:
+            # bundle 内部 field は Phase A 互換の sql_digest のまま、
+            # 表示層でのみ中立名を併記する
+            payload_json["request_digest"] = outcome.sql_digest
+        print(json.dumps(payload_json, ensure_ascii=False))
     else:
         print("── proposal 生成 ──")
         print(f"plan_id: {outcome.plan_id}")
@@ -176,7 +248,7 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
             f"想定件数: {outcome.expected_rows[0]}〜{outcome.expected_rows[1]} 件"
         )
         print(f"delivery: {outcome.delivery_dir}")
-        print(f"sql_digest: {outcome.sql_digest}")
+        print(f"{digest_label}: {outcome.sql_digest}")
         print(f"expires_at: {outcome.expires_at}")
     return 0
 
@@ -202,11 +274,16 @@ def _cmd_approve(args: argparse.Namespace) -> int:
         return _fail(preview_result)
     preview = preview_result.value
 
+    digest_label = (
+        "request_digest"
+        if _entry_type(args.wiki_root, preview.tool_id) == "http"
+        else "sql_digest"
+    )
     # summary と確認プロンプトは stderr（--format json の stdout を汚染しない）
     print("── 承認対象 ──", file=sys.stderr)
     print(f"plan_id: {preview.plan_id}", file=sys.stderr)
     print(f"tool: {preview.tool_id}", file=sys.stderr)
-    print(f"sql_digest: {preview.sql_digest}", file=sys.stderr)
+    print(f"{digest_label}: {preview.sql_digest}", file=sys.stderr)
     print(
         f"想定件数: {preview.expected_rows[0]}〜{preview.expected_rows[1]} 件",
         file=sys.stderr,
@@ -297,6 +374,91 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+_STATUS_LABEL = {
+    CheckStatus.OK: "OK",
+    CheckStatus.NG: "NG",
+    CheckStatus.SKIP: "SKIP",
+}
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    doctor = _build_doctor(args.wiki_root)
+    result = doctor.run_checked(
+        tool=args.tool, probe_write=args.probe_write, announce=_progress
+    )
+    if is_err(result):
+        print(f"error: {result.error.value}: {result.detail}", file=sys.stderr)
+        return (
+            2
+            if result.error in (DoctorError.UNKNOWN_TOOL, DoctorError.INVALID_PROBE)
+            else 1
+        )
+    report = result.value
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "diagnoses": [
+                        {
+                            "tool_id": d.tool_id,
+                            "type": d.type,
+                            "checks": [
+                                {
+                                    "check": o.check,
+                                    "status": o.status.value,
+                                    "reason_code": o.reason_code,
+                                    "hint": o.hint,
+                                }
+                                for o in d.outcomes
+                            ],
+                        }
+                        for d in report.diagnoses
+                    ],
+                    "skip_summary": report.skip_summary(),
+                    "ok": not report.has_ng(),
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        # 固定列: tool / check / status / reason_code / hint
+        rows = [
+            (
+                diag.tool_id,
+                o.check,
+                _STATUS_LABEL[o.status],
+                o.reason_code,
+                o.hint if o.status != CheckStatus.OK else "",
+            )
+            for diag in report.diagnoses
+            for o in diag.outcomes
+        ]
+        headers = ("tool", "check", "status", "reason_code", "hint")
+        widths = [len(h) for h in headers]
+        for r in rows:
+            for i, cell in enumerate(r[:4]):
+                widths[i] = max(widths[i], len(cell))
+        print(
+            "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers[:4]))
+            + "  hint"
+        )
+        for r in rows:
+            line = "  ".join(r[i].ljust(widths[i]) for i in range(4))
+            print(f"{line}  {r[4]}")
+        skips = report.skip_summary()
+        skip_total = sum(skips.values())
+        print(f"SKIP: {skip_total} 件" + (f" ({skips})" if skips else ""))
+        print("判定: " + ("NG あり" if report.has_ng() else "必須 check 全 OK"))
+
+    return 1 if report.has_ng() else 0
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -324,13 +486,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_common(p_prepare)
     p_prepare.add_argument("--tool", required=True)
-    p_prepare.add_argument("--sql-file", required=True)
+    p_prepare.add_argument("--sql-file", help="SQL 系 tool（sqlite/postgres/mysql）用")
     p_prepare.add_argument(
         "--count-sql",
         action="append",
-        required=True,
         type=_parse_count_sql,
-        help="<label>=<path>（複数可、順序保持）",
+        help="<label>=<path>（複数可、順序保持。SQL 系 tool 用）",
+    )
+    p_prepare.add_argument(
+        "--request-file", help="http tool 用の request spec（JSON）"
+    )
+    p_prepare.add_argument(
+        "--count-request",
+        action="append",
+        type=_parse_count_sql,
+        help="<label>=<path>（http tool 用。spec は count_path を持つ）",
     )
     p_prepare.add_argument("--key-columns", nargs="+", required=True)
     p_prepare.add_argument(
@@ -356,6 +526,18 @@ def main(argv: list[str] | None = None) -> int:
     _add_common(p_execute)
     p_execute.add_argument("--plan", required=True)
     p_execute.set_defaults(handler=_cmd_execute)
+
+    p_doctor = subparsers.add_parser(
+        "doctor", help="接続疎通・read-only 状態・delivery 書込可否のローカル診断"
+    )
+    _add_common(p_doctor)
+    p_doctor.add_argument("--tool", help="診断対象を 1 tool に絞る")
+    p_doctor.add_argument(
+        "--probe-write",
+        metavar="TOOL_ID",
+        help="canary relation への INSERT を試行し拒否を確認（二重 opt-in）",
+    )
+    p_doctor.set_defaults(handler=_cmd_doctor)
 
     args = parser.parse_args(argv)
 
