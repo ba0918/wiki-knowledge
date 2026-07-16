@@ -1,10 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tool Catalog",
-  "description": "wiki-tool-query の実行契約の真実源。接続先・制約・credential_ref を git 管理 JSON で宣言する。実行時検証は skills/wiki/scripts/lib/service/tool_catalog.py の hand-rolled validator が担い、本 schema との全制約同期は test_tool_catalog.py が機械検証する。",
+  "description": "wiki-tool-query の実行契約の真実源。接続先・制約・credential_ref を git 管理 JSON で宣言する。実行時検証は skills/wiki/scripts/lib/service/tool_catalog.py の hand-rolled validator が担い、本 schema との構造制約同期（required / enum / type / additionalProperties / minItems / minLength / pattern / const / bounds）は test_tool_catalog.py が機械検証する。相関制約（cross-field: allow_insecure_tls の localhost 限定・tls_ca_file 相互排他・http の allow_insecure が https で禁止・base_url が origin のみ）は draft-07 の if/then で表現しきれず、かつ本プロジェクトは schema を実行時 validation に使わないため、validator が真実源として所有する（この構造 schema には意図的に含めない）。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "tools"],
+  "required": [
+    "schema_version",
+    "tools"
+  ],
   "properties": {
     "schema_version": {
       "type": "integer",
@@ -12,11 +15,26 @@
     },
     "tools": {
       "type": "array",
-      "items": { "$ref": "#/definitions/tool" }
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/definitions/tool_sqlite"
+          },
+          {
+            "$ref": "#/definitions/tool_postgres"
+          },
+          {
+            "$ref": "#/definitions/tool_mysql"
+          },
+          {
+            "$ref": "#/definitions/tool_http"
+          }
+        ]
+      }
     }
   },
   "definitions": {
-    "tool": {
+    "tool_sqlite": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -34,12 +52,14 @@
           "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
         },
         "type": {
-          "enum": ["sqlite"]
+          "const": "sqlite"
         },
         "connection": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path"],
+          "required": [
+            "path"
+          ],
           "properties": {
             "path": {
               "type": "string",
@@ -53,24 +73,15 @@
             }
           }
         },
-        "credential_ref": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
-          "description": "{wiki_root}/.local/credentials.json 内のキー。sqlite はファイル接続のため省略可（postgres 追加時に必須化）"
-        },
-        "allowed_tables": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
-          },
-          "description": "relation allowlist。view を含める場合はその基底 relation も必須（authorizer は基底 table の READ を発火する）"
-        },
         "limits": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["max_rows", "max_result_bytes", "max_cell_bytes", "timeout_sec"],
+          "required": [
+            "max_rows",
+            "max_result_bytes",
+            "max_cell_bytes",
+            "timeout_sec"
+          ],
           "properties": {
             "max_rows": {
               "type": "integer",
@@ -96,13 +107,12 @@
             }
           }
         },
-        "allowed_statements": {
-          "const": ["select"]
-        },
         "delivery": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["allowed_dirs"],
+          "required": [
+            "allowed_dirs"
+          ],
           "properties": {
             "allowed_dirs": {
               "type": "array",
@@ -114,6 +124,446 @@
               "description": "publish 先として許可する directory。絶対パス、または wiki_root 相対"
             }
           }
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
+          "description": "{wiki_root}/.local/credentials.json 内のキー。sqlite のみ省略可"
+        },
+        "allowed_tables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          },
+          "description": "relation allowlist。view を含める場合はその基底 relation も必須（authorizer は基底 table の READ を発火する）"
+        },
+        "allowed_statements": {
+          "const": [
+            "select"
+          ]
+        }
+      }
+    },
+    "tool_postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "type",
+        "connection",
+        "credential_ref",
+        "allowed_tables",
+        "limits",
+        "allowed_statements",
+        "delivery"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+        },
+        "type": {
+          "const": "postgres"
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port",
+            "dbname",
+            "user"
+          ],
+          "properties": {
+            "host": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "dbname": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_$-]{1,64}$"
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.$-]{1,128}$",
+              "description": "接続ユーザー（read-only role）。credential_ref が解決するのは password のみ"
+            },
+            "default_schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+              "description": "未修飾 relation 名の展開先（既定 public）。search_path には依存しない"
+            },
+            "tls_ca_file": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CA ファイル（省略時はシステム CA）。既定は verify-full 相当"
+            },
+            "allow_insecure_tls": {
+              "type": "boolean",
+              "description": "TLS 検証の明示緩和。host が localhost / 127.0.0.1 / ::1 の場合のみ受理"
+            },
+            "canary_relation": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\\.[A-Za-z_][A-Za-z0-9_]{0,127})?$",
+              "description": "doctor --probe-write 専用の canary relation。未宣言なら probe 拒否"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_rows",
+            "max_result_bytes",
+            "max_cell_bytes",
+            "timeout_sec"
+          ],
+          "properties": {
+            "max_rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456,
+              "description": "無害化後 CSV encoded bytes の累積上限"
+            },
+            "max_cell_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "description": "計測規則: TEXT = UTF-8 encoded bytes / BLOB = raw bytes / 数値 = 文字列化後 bytes"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed_dirs"
+          ],
+          "properties": {
+            "allowed_dirs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "publish 先として許可する directory。絶対パス、または wiki_root 相対"
+            }
+          }
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
+          "description": "{wiki_root}/.local/credentials.json 内のキー。sqlite のみ省略可"
+        },
+        "allowed_tables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\\.[A-Za-z_][A-Za-z0-9_]{0,127})?$"
+          },
+          "description": "relation allowlist。完全修飾（schema.table / db.table）または未修飾（既定名前空間に展開）。SQL gate の canonical ID 照合に使う"
+        },
+        "allowed_statements": {
+          "const": [
+            "select"
+          ]
+        }
+      }
+    },
+    "tool_mysql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "type",
+        "connection",
+        "credential_ref",
+        "allowed_tables",
+        "limits",
+        "allowed_statements",
+        "delivery"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+        },
+        "type": {
+          "const": "mysql"
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port",
+            "dbname",
+            "user"
+          ],
+          "properties": {
+            "host": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "dbname": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_$-]{1,64}$"
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.$-]{1,128}$",
+              "description": "接続ユーザー（read-only role）。credential_ref が解決するのは password のみ"
+            },
+            "tls_ca_file": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CA ファイル（省略時はシステム CA）。既定は verify-full 相当"
+            },
+            "allow_insecure_tls": {
+              "type": "boolean",
+              "description": "TLS 検証の明示緩和。host が localhost / 127.0.0.1 / ::1 の場合のみ受理"
+            },
+            "canary_relation": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\\.[A-Za-z_][A-Za-z0-9_]{0,127})?$",
+              "description": "doctor --probe-write 専用の canary relation。未宣言なら probe 拒否"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_rows",
+            "max_result_bytes",
+            "max_cell_bytes",
+            "timeout_sec"
+          ],
+          "properties": {
+            "max_rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456,
+              "description": "無害化後 CSV encoded bytes の累積上限"
+            },
+            "max_cell_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "description": "計測規則: TEXT = UTF-8 encoded bytes / BLOB = raw bytes / 数値 = 文字列化後 bytes"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed_dirs"
+          ],
+          "properties": {
+            "allowed_dirs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "publish 先として許可する directory。絶対パス、または wiki_root 相対"
+            }
+          }
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
+          "description": "{wiki_root}/.local/credentials.json 内のキー。sqlite のみ省略可"
+        },
+        "allowed_tables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\\.[A-Za-z_][A-Za-z0-9_]{0,127})?$"
+          },
+          "description": "relation allowlist。完全修飾（schema.table / db.table）または未修飾（既定名前空間に展開）。SQL gate の canonical ID 照合に使う"
+        },
+        "allowed_statements": {
+          "const": [
+            "select"
+          ]
+        }
+      }
+    },
+    "tool_http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "type",
+        "connection",
+        "credential_ref",
+        "limits",
+        "delivery"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+        },
+        "type": {
+          "const": "http"
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base_url",
+            "allowed_endpoints",
+            "auth_header_name",
+            "auth_header_template"
+          ],
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "pattern": "^https?://",
+              "description": "origin のみ（path・query・fragment・userinfo 不可）。https 必須（http は allow_insecure + localhost 限定）"
+            },
+            "allowed_endpoints": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "method",
+                  "path_prefix"
+                ],
+                "properties": {
+                  "method": {
+                    "enum": [
+                      "GET",
+                      "POST"
+                    ]
+                  },
+                  "path_prefix": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "description": "segment 境界で前方一致。canonical 形式（encoding・traversal・空 segment 不可）を宣言段階で要求"
+                  }
+                }
+              }
+            },
+            "auth_header_name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9-]{1,64}$"
+            },
+            "auth_header_template": {
+              "type": "string",
+              "pattern": "\\{credential\\}",
+              "description": "{credential} を credential_ref の秘密値で置換して注入（例: \"Key {credential}\"）"
+            },
+            "allow_insecure": {
+              "type": "boolean",
+              "description": "http base_url の明示 opt-in（localhost 限定）"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_rows",
+            "max_result_bytes",
+            "max_cell_bytes",
+            "timeout_sec",
+            "max_response_bytes"
+          ],
+          "properties": {
+            "max_rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456,
+              "description": "無害化後 CSV encoded bytes の累積上限"
+            },
+            "max_cell_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "description": "計測規則: TEXT = UTF-8 encoded bytes / BLOB = raw bytes / 数値 = 文字列化後 bytes"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "max_response_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456,
+              "description": "HTTP レスポンス body の wire バイト上限（identity encoding 固定・chunk 検査で超過時に確保前遮断）。推奨 8 MiB"
+            }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed_dirs"
+          ],
+          "properties": {
+            "allowed_dirs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "publish 先として許可する directory。絶対パス、または wiki_root 相対"
+            }
+          }
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$",
+          "description": "{wiki_root}/.local/credentials.json 内のキー。sqlite のみ省略可"
         }
       }
     }

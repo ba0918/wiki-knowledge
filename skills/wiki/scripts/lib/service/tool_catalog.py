@@ -7,8 +7,17 @@ catalog（``{wiki_root}/tools/catalog.json``、git 管理）は wiki-tool-query 
 
 schema-of-record は ``{wiki_root}/schema/tool-catalog-schema.json``。実行時
 検証は本モジュールの hand-rolled validator が担い（querylog_append.py と
-同方式 — jsonschema 依存を追加しない）、schema JSON との全制約同期は
-``test_tool_catalog.py`` が機械検証する。
+同方式 — jsonschema 依存を追加しない）、schema JSON との**構造制約同期**
+（required / enum / type / additionalProperties / minItems / minLength /
+pattern / const / bounds）は ``test_tool_catalog.py`` が機械検証する。
+
+**相関制約（cross-field）は validator のみが所有する**: ``allow_insecure_tls``
+の localhost 限定 / ``tls_ca_file`` との相互排他 / http の ``allow_insecure``
+が https で禁止 / ``base_url`` が origin のみ — これらは draft-07 の if/then
+で表現しきれない（表現しても本プロジェクトは schema を実行時 validation に
+使わないため二重管理になる）。構造 schema はこれらを意図的に持たず、
+真実源は validator。相関制約の enforcement は個別テスト（localhost 限定・
+相互排他等）が担保する。
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ import stat as _stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from lib.domain.types import Err, Ok, is_err
 from lib.service.path_validator import ID_PATTERN
@@ -34,29 +44,116 @@ CATALOG_RELATIVE_PATH = "tools/catalog.json"
 # schema-of-record（tool-catalog-schema.json）と同期。
 # test_tool_catalog.py::TestSchemaSync が機械的に同期を検証する。
 CATALOG_REQUIRED_TOP = ("schema_version", "tools")
-ENTRY_REQUIRED = (
-    "tool_id",
-    "type",
-    "connection",
-    "allowed_tables",
-    "limits",
-    "allowed_statements",
-    "delivery",
-)
-ENTRY_OPTIONAL = ("credential_ref",)
-LIMITS_REQUIRED = ("max_rows", "max_result_bytes", "max_cell_bytes", "timeout_sec")
-CONNECTOR_TYPES = ("sqlite",)
+CONNECTOR_TYPES = ("sqlite", "postgres", "mysql", "http")
 ALLOWED_STATEMENTS = ("select",)
+HTTP_METHODS = ("GET", "POST")
+LOCALHOST_HOSTS = ("localhost", "127.0.0.1", "::1")
+DEFAULT_PG_SCHEMA = "public"
+
+# type 別の必須 / 任意フィールド（schema JSON の oneOf variant と同期）。
+# credential_ref は sqlite のみ任意（ファイル接続で値を使わない）、リモート
+# 接続の pg / mysql / http では必須 — 匿名接続の宣言を catalog 段階で拒否する。
+ENTRY_REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "sqlite": (
+        "tool_id",
+        "type",
+        "connection",
+        "allowed_tables",
+        "limits",
+        "allowed_statements",
+        "delivery",
+    ),
+    "postgres": (
+        "tool_id",
+        "type",
+        "connection",
+        "credential_ref",
+        "allowed_tables",
+        "limits",
+        "allowed_statements",
+        "delivery",
+    ),
+    "mysql": (
+        "tool_id",
+        "type",
+        "connection",
+        "credential_ref",
+        "allowed_tables",
+        "limits",
+        "allowed_statements",
+        "delivery",
+    ),
+    # http に allowed_tables / allowed_statements は存在しない（endpoint
+    # allowlist が対応物）— 宣言されたら未知キーとして拒否する
+    "http": ("tool_id", "type", "connection", "credential_ref", "limits", "delivery"),
+}
+ENTRY_OPTIONAL_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "sqlite": ("credential_ref",),
+    "postgres": (),
+    "mysql": (),
+    "http": (),
+}
+CONNECTION_REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "sqlite": ("path",),
+    "postgres": ("host", "port", "dbname", "user"),
+    "mysql": ("host", "port", "dbname", "user"),
+    "http": ("base_url", "allowed_endpoints", "auth_header_name", "auth_header_template"),
+}
+CONNECTION_OPTIONAL_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "sqlite": ("base_dir",),
+    "postgres": (
+        "default_schema",
+        "tls_ca_file",
+        "allow_insecure_tls",
+        "canary_relation",
+    ),
+    "mysql": ("tls_ca_file", "allow_insecure_tls", "canary_relation"),
+    "http": ("allow_insecure",),
+}
+LIMITS_REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "sqlite": ("max_rows", "max_result_bytes", "max_cell_bytes", "timeout_sec"),
+    "postgres": ("max_rows", "max_result_bytes", "max_cell_bytes", "timeout_sec"),
+    "mysql": ("max_rows", "max_result_bytes", "max_cell_bytes", "timeout_sec"),
+    "http": (
+        "max_rows",
+        "max_result_bytes",
+        "max_cell_bytes",
+        "timeout_sec",
+        "max_response_bytes",
+    ),
+}
 LIMIT_BOUNDS: dict[str, tuple[int, int]] = {
     "max_rows": (1, 1_000_000),
     "max_result_bytes": (1, 268_435_456),
     "max_cell_bytes": (1, 1_048_576),
     "timeout_sec": (1, 600),
+    "max_response_bytes": (1, 268_435_456),
 }
+PORT_BOUNDS = (1, 65535)
+
 TABLE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+QUALIFIED_TABLE_PATTERN = (
+    r"^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_]{0,127})?$"
+)
+HOST_PATTERN = r"^[A-Za-z0-9._:-]+$"
+DBNAME_PATTERN = r"^[A-Za-z0-9_$-]{1,64}$"
+USER_PATTERN = r"^[A-Za-z0-9_.$-]{1,128}$"
+PG_SCHEMA_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]{0,62}$"
+HEADER_NAME_PATTERN = r"^[A-Za-z0-9-]{1,64}$"
+HEADER_TEMPLATE_PATTERN = r"\{credential\}"
+# base_url / path_prefix は正規表現で表しきれない制約（origin のみ・
+# canonical path）を validator が持つ。schema 側 pattern は前提部分のみ
+BASE_URL_PATTERN = r"^https?://"
+PATH_PREFIX_PATTERN = r"^/"
 
 _ID_RE = re.compile(ID_PATTERN)
 _TABLE_RE = re.compile(TABLE_PATTERN)
+_QUALIFIED_TABLE_RE = re.compile(QUALIFIED_TABLE_PATTERN)
+_HOST_RE = re.compile(HOST_PATTERN)
+_DBNAME_RE = re.compile(DBNAME_PATTERN)
+_USER_RE = re.compile(USER_PATTERN)
+_PG_SCHEMA_RE = re.compile(PG_SCHEMA_PATTERN)
+_HEADER_NAME_RE = re.compile(HEADER_NAME_PATTERN)
 
 
 class CatalogError(str, Enum):
@@ -84,19 +181,90 @@ class ToolLimits:
     max_result_bytes: int
     max_cell_bytes: int
     timeout_sec: int
+    max_response_bytes: int | None = None  # http のみ（SQL 系は None）
+
+
+# --- type 別 tagged connection config -------------------------------------
+# catalog parse 時に type ごとの設定を確定し、以降の層は型で分岐しない
+# （runner は registry へ委譲するだけで connection の中身を見ない）。
+
+
+@dataclass(frozen=True)
+class SqliteConnectionConfig:
+    path: str
+    base_dir: str | None = None
+
+
+@dataclass(frozen=True)
+class PostgresConnectionConfig:
+    host: str
+    port: int
+    dbname: str
+    user: str
+    default_schema: str = DEFAULT_PG_SCHEMA
+    tls_ca_file: str | None = None
+    allow_insecure_tls: bool = False
+    canary_relation: str | None = None
+
+
+@dataclass(frozen=True)
+class MySqlConnectionConfig:
+    host: str
+    port: int
+    dbname: str
+    user: str
+    tls_ca_file: str | None = None
+    allow_insecure_tls: bool = False
+    canary_relation: str | None = None
+
+
+@dataclass(frozen=True)
+class HttpEndpointRule:
+    method: str
+    path_prefix: str
+
+
+@dataclass(frozen=True)
+class HttpConnectionConfig:
+    base_url: str
+    allowed_endpoints: tuple[HttpEndpointRule, ...]
+    auth_header_name: str
+    auth_header_template: str  # "{credential}" を秘密値で置換して注入
+    allow_insecure: bool = False
+
+
+ConnectionConfig = (
+    SqliteConnectionConfig
+    | PostgresConnectionConfig
+    | MySqlConnectionConfig
+    | HttpConnectionConfig
+)
 
 
 @dataclass(frozen=True)
 class ToolEntry:
     tool_id: str
     type: str
-    connection_path: str
-    connection_base_dir: str | None
+    connection: ConnectionConfig
     credential_ref: str | None
     allowed_tables: tuple[str, ...]
     allowed_statements: tuple[str, ...]
     delivery_allowed_dirs: tuple[str, ...]
     limits: ToolLimits
+
+    # Phase A 互換の sqlite 用アクセサ。他 type で触れたら設計違反として
+    # 即座に落とす（registry を経ずに DB path を引く経路を作らせない）
+    @property
+    def connection_path(self) -> str:
+        if not isinstance(self.connection, SqliteConnectionConfig):
+            raise TypeError("connection_path は sqlite entry のみ参照できます")
+        return self.connection.path
+
+    @property
+    def connection_base_dir(self) -> str | None:
+        if not isinstance(self.connection, SqliteConnectionConfig):
+            raise TypeError("connection_base_dir は sqlite entry のみ参照できます")
+        return self.connection.base_dir
 
 
 @dataclass(frozen=True)
@@ -116,16 +284,185 @@ def _is_positive_int(value: object) -> bool:
     return type(value) is int and value > 0
 
 
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _has_control_char(text: str) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text)
+
+
+def _matches(pattern: re.Pattern[str], value: object) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def _is_canonical_path_prefix(value: object) -> bool:
+    """endpoint allowlist の path_prefix は最初から canonical 形式を要求する。
+
+    実行時 URL は canonicalize してから照合するが、allowlist 側に encoding・
+    traversal・空 segment の余地があると照合の意味論が曖昧になるため、
+    宣言段階で拒否する。
+    """
+
+    if not isinstance(value, str) or not value.startswith("/"):
+        return False
+    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in value):
+        return False
+    if any(ch in value for ch in ("%", "\\", "?", "#")):
+        return False
+    parts = value.split("/")
+    if any(part in (".", "..") for part in parts):
+        return False
+    # 先頭の空要素（leading /）以外の空 segment（"//"・末尾 /）を拒否
+    return "" not in parts[1:]
+
+
+def _validate_connection_sqlite(where: str, conn: dict) -> list[str]:
+    errors: list[str] = []
+    if not _is_nonempty_str(conn.get("path")):
+        errors.append(f"{where}: connection.path が非空文字列ではない")
+    base_dir = conn.get("base_dir")
+    if base_dir is not None and not _is_nonempty_str(base_dir):
+        errors.append(f"{where}: connection.base_dir が非空文字列ではない")
+    return errors
+
+
+def _validate_connection_db(where: str, conn: dict, *, ctype: str) -> list[str]:
+    errors: list[str] = []
+    if not _matches(_HOST_RE, conn.get("host")):
+        errors.append(f"{where}: connection.host が host 形式ではない")
+    port = conn.get("port")
+    lo, hi = PORT_BOUNDS
+    if not _is_positive_int(port) or not (lo <= port <= hi):
+        errors.append(f"{where}: connection.port は {lo}..{hi} の整数が必要")
+    if not _matches(_DBNAME_RE, conn.get("dbname")):
+        errors.append(f"{where}: connection.dbname が識別子形式ではない")
+    if not _matches(_USER_RE, conn.get("user")):
+        errors.append(f"{where}: connection.user が識別子形式ではない")
+
+    if ctype == "postgres" and "default_schema" in conn:
+        if not _matches(_PG_SCHEMA_RE, conn["default_schema"]):
+            errors.append(f"{where}: connection.default_schema が識別子形式ではない")
+
+    tls_ca_file = conn.get("tls_ca_file")
+    if tls_ca_file is not None and not _is_nonempty_str(tls_ca_file):
+        errors.append(f"{where}: connection.tls_ca_file が非空文字列ではない")
+
+    allow_insecure = conn.get("allow_insecure_tls", False)
+    if type(allow_insecure) is not bool:
+        errors.append(f"{where}: connection.allow_insecure_tls は boolean が必要")
+    elif allow_insecure:
+        if conn.get("host") not in LOCALHOST_HOSTS:
+            errors.append(
+                f"{where}: allow_insecure_tls は host が localhost の場合のみ許可"
+            )
+        if tls_ca_file is not None:
+            errors.append(
+                f"{where}: allow_insecure_tls と tls_ca_file は同時に宣言できない"
+            )
+
+    canary = conn.get("canary_relation")
+    if canary is not None and not _matches(_QUALIFIED_TABLE_RE, canary):
+        errors.append(f"{where}: connection.canary_relation が relation 形式ではない")
+    return errors
+
+
+def _validate_connection_http(where: str, conn: dict) -> list[str]:
+    errors: list[str] = []
+    allow_insecure = conn.get("allow_insecure", False)
+    if type(allow_insecure) is not bool:
+        errors.append(f"{where}: connection.allow_insecure は boolean が必要")
+        allow_insecure = False
+
+    base_url = conn.get("base_url")
+    if not isinstance(base_url, str) or not re.match(BASE_URL_PATTERN, base_url):
+        errors.append(f"{where}: connection.base_url は http(s) URL が必要")
+    else:
+        try:
+            split = urlsplit(base_url)
+            hostname = split.hostname
+        except ValueError:
+            split = None
+            hostname = None
+        if split is None or not hostname:
+            errors.append(f"{where}: connection.base_url の host が解決できない")
+        else:
+            if split.username is not None or split.password is not None:
+                errors.append(f"{where}: connection.base_url に userinfo は不可")
+            if split.path not in ("", "/") or split.query or split.fragment:
+                errors.append(
+                    f"{where}: connection.base_url は origin のみ"
+                    "（path・query・fragment 不可）"
+                )
+            if split.scheme == "http":
+                if not allow_insecure:
+                    errors.append(
+                        f"{where}: http の base_url は allow_insecure: true の"
+                        "明示 opt-in が必要"
+                    )
+                elif hostname not in LOCALHOST_HOSTS:
+                    errors.append(
+                        f"{where}: allow_insecure は localhost 限定"
+                    )
+            elif allow_insecure:
+                errors.append(
+                    f"{where}: allow_insecure は http の base_url 専用"
+                    "（https では宣言できない）"
+                )
+
+    endpoints = conn.get("allowed_endpoints")
+    if not isinstance(endpoints, list) or not endpoints:
+        errors.append(f"{where}: connection.allowed_endpoints が非空配列ではない")
+    else:
+        for i, ep in enumerate(endpoints):
+            ep_where = f"{where}: allowed_endpoints[{i}]"
+            if not isinstance(ep, dict):
+                errors.append(f"{ep_where} がオブジェクトではない")
+                continue
+            for key in ep:
+                if key not in ("method", "path_prefix"):
+                    errors.append(f"{ep_where} の未知のキー: {key}")
+            if ep.get("method") not in HTTP_METHODS:
+                errors.append(
+                    f"{ep_where}.method は {list(HTTP_METHODS)} のいずれかが必要"
+                )
+            if not _is_canonical_path_prefix(ep.get("path_prefix")):
+                errors.append(
+                    f"{ep_where}.path_prefix は canonical な / 始まりパスが必要"
+                )
+
+    if not _matches(_HEADER_NAME_RE, conn.get("auth_header_name")):
+        errors.append(f"{where}: connection.auth_header_name が header 名ではない")
+    template = conn.get("auth_header_template")
+    if (
+        not _is_nonempty_str(template)
+        or "{credential}" not in template
+        or _has_control_char(template)
+    ):
+        errors.append(
+            f"{where}: connection.auth_header_template は制御文字なしで"
+            " {credential} を含む必要がある"
+        )
+    return errors
+
+
 def _validate_entry(index: int, entry: object) -> list[str]:
     where = f"tools[{index}]"
     if not isinstance(entry, dict):
         return [f"{where}: オブジェクトではない"]
 
+    ctype = entry.get("type")
+    if "type" not in entry:
+        return [f"{where}: 必須フィールド欠損: type"]
+    if ctype not in CONNECTOR_TYPES:
+        return [f"{where}: type が未対応: {ctype!r}"]
+
     errors: list[str] = []
-    for field in ENTRY_REQUIRED:
+    required = ENTRY_REQUIRED_BY_TYPE[ctype]
+    known = set(required) | set(ENTRY_OPTIONAL_BY_TYPE[ctype])
+    for field in required:
         if field not in entry:
             errors.append(f"{where}: 必須フィールド欠損: {field}")
-    known = set(ENTRY_REQUIRED) | set(ENTRY_OPTIONAL)
     for key in entry:
         if key not in known:
             errors.append(f"{where}: 未知のキー: {key}")
@@ -136,43 +473,64 @@ def _validate_entry(index: int, entry: object) -> list[str]:
     if not isinstance(tool_id, str) or not _ID_RE.fullmatch(tool_id):
         errors.append(f"{where}: tool_id が slug 形式ではない: {tool_id!r}")
 
-    if entry["type"] not in CONNECTOR_TYPES:
-        errors.append(f"{where}: type が未対応: {entry['type']!r}")
+    # credential_ref は required（remote connector）と optional（sqlite）で
+    # 扱いが分岐する。required の型で null / 非文字列を通すと、schema の
+    # "type": "string" と乖離したまま接続段階まで進む（存在チェックだけでは
+    # 値 null を弾けない）ため、required の場合は非空 slug 文字列を必須にする
+    cred = entry.get("credential_ref")
+    cred_required = "credential_ref" in required
+    if cred_required:
+        if not isinstance(cred, str) or not _ID_RE.fullmatch(cred):
+            errors.append(
+                f"{where}: credential_ref は非空の slug 文字列が必須: {cred!r}"
+            )
+    elif cred is not None and (
+        not isinstance(cred, str) or not _ID_RE.fullmatch(cred)
+    ):
+        errors.append(f"{where}: credential_ref が slug 形式ではない: {cred!r}")
 
     conn = entry["connection"]
     if not isinstance(conn, dict):
         errors.append(f"{where}: connection がオブジェクトではない")
     else:
+        conn_known = set(CONNECTION_REQUIRED_BY_TYPE[ctype]) | set(
+            CONNECTION_OPTIONAL_BY_TYPE[ctype]
+        )
+        conn_errors: list[str] = []
+        for field in CONNECTION_REQUIRED_BY_TYPE[ctype]:
+            if field not in conn:
+                conn_errors.append(f"{where}: connection.{field} 欠損")
         for key in conn:
-            if key not in ("path", "base_dir"):
-                errors.append(f"{where}: connection の未知のキー: {key}")
-        path = conn.get("path")
-        if not isinstance(path, str) or not path:
-            errors.append(f"{where}: connection.path が非空文字列ではない")
-        base_dir = conn.get("base_dir")
-        if base_dir is not None and (not isinstance(base_dir, str) or not base_dir):
-            errors.append(f"{where}: connection.base_dir が非空文字列ではない")
+            if key not in conn_known:
+                conn_errors.append(f"{where}: connection の未知のキー: {key}")
+        if conn_errors:
+            errors.extend(conn_errors)
+        elif ctype == "sqlite":
+            errors.extend(_validate_connection_sqlite(where, conn))
+        elif ctype in ("postgres", "mysql"):
+            errors.extend(_validate_connection_db(where, conn, ctype=ctype))
+        else:
+            errors.extend(_validate_connection_http(where, conn))
 
-    cred = entry.get("credential_ref")
-    if cred is not None and (not isinstance(cred, str) or not _ID_RE.fullmatch(cred)):
-        errors.append(f"{where}: credential_ref が slug 形式ではない: {cred!r}")
-
-    tables = entry["allowed_tables"]
-    if not isinstance(tables, list) or not tables:
-        errors.append(f"{where}: allowed_tables が非空配列ではない")
-    else:
-        for t in tables:
-            if not isinstance(t, str) or not _TABLE_RE.fullmatch(t):
-                errors.append(f"{where}: allowed_tables に不正な識別子: {t!r}")
+    if "allowed_tables" in known:
+        tables = entry["allowed_tables"]
+        table_re = _TABLE_RE if ctype == "sqlite" else _QUALIFIED_TABLE_RE
+        if not isinstance(tables, list) or not tables:
+            errors.append(f"{where}: allowed_tables が非空配列ではない")
+        else:
+            for t in tables:
+                if not isinstance(t, str) or not table_re.fullmatch(t):
+                    errors.append(f"{where}: allowed_tables に不正な識別子: {t!r}")
 
     limits = entry["limits"]
+    limits_required = LIMITS_REQUIRED_BY_TYPE[ctype]
     if not isinstance(limits, dict):
         errors.append(f"{where}: limits がオブジェクトではない")
     else:
         for key in limits:
-            if key not in LIMITS_REQUIRED:
+            if key not in limits_required:
                 errors.append(f"{where}: limits の未知のキー: {key}")
-        for field in LIMITS_REQUIRED:
+        for field in limits_required:
             if field not in limits:
                 errors.append(f"{where}: limits.{field} 欠損")
                 continue
@@ -183,7 +541,9 @@ def _validate_entry(index: int, entry: object) -> list[str]:
                     f"{where}: limits.{field} は {lo}..{hi} の整数が必要: {value!r}"
                 )
 
-    if entry["allowed_statements"] != list(ALLOWED_STATEMENTS):
+    if "allowed_statements" in known and entry["allowed_statements"] != list(
+        ALLOWED_STATEMENTS
+    ):
         errors.append(
             f"{where}: allowed_statements は {list(ALLOWED_STATEMENTS)!r} 固定: "
             f"{entry['allowed_statements']!r}"
@@ -254,22 +614,61 @@ def validate_catalog(data: object) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _to_connection(ctype: str, conn: dict) -> ConnectionConfig:
+    if ctype == "sqlite":
+        return SqliteConnectionConfig(
+            path=conn["path"], base_dir=conn.get("base_dir")
+        )
+    if ctype == "postgres":
+        return PostgresConnectionConfig(
+            host=conn["host"],
+            port=conn["port"],
+            dbname=conn["dbname"],
+            user=conn["user"],
+            default_schema=conn.get("default_schema", DEFAULT_PG_SCHEMA),
+            tls_ca_file=conn.get("tls_ca_file"),
+            allow_insecure_tls=conn.get("allow_insecure_tls", False),
+            canary_relation=conn.get("canary_relation"),
+        )
+    if ctype == "mysql":
+        return MySqlConnectionConfig(
+            host=conn["host"],
+            port=conn["port"],
+            dbname=conn["dbname"],
+            user=conn["user"],
+            tls_ca_file=conn.get("tls_ca_file"),
+            allow_insecure_tls=conn.get("allow_insecure_tls", False),
+            canary_relation=conn.get("canary_relation"),
+        )
+    return HttpConnectionConfig(
+        base_url=conn["base_url"],
+        allowed_endpoints=tuple(
+            HttpEndpointRule(method=ep["method"], path_prefix=ep["path_prefix"])
+            for ep in conn["allowed_endpoints"]
+        ),
+        auth_header_name=conn["auth_header_name"],
+        auth_header_template=conn["auth_header_template"],
+        allow_insecure=conn.get("allow_insecure", False),
+    )
+
+
 def _to_entry(raw: dict) -> ToolEntry:
     limits = raw["limits"]
+    ctype = raw["type"]
     return ToolEntry(
         tool_id=raw["tool_id"],
-        type=raw["type"],
-        connection_path=raw["connection"]["path"],
-        connection_base_dir=raw["connection"].get("base_dir"),
+        type=ctype,
+        connection=_to_connection(ctype, raw["connection"]),
         credential_ref=raw.get("credential_ref"),
-        allowed_tables=tuple(raw["allowed_tables"]),
-        allowed_statements=tuple(raw["allowed_statements"]),
+        allowed_tables=tuple(raw.get("allowed_tables", ())),
+        allowed_statements=tuple(raw.get("allowed_statements", ())),
         delivery_allowed_dirs=tuple(raw["delivery"]["allowed_dirs"]),
         limits=ToolLimits(
             max_rows=limits["max_rows"],
             max_result_bytes=limits["max_result_bytes"],
             max_cell_bytes=limits["max_cell_bytes"],
             timeout_sec=limits["timeout_sec"],
+            max_response_bytes=limits.get("max_response_bytes"),
         ),
     )
 

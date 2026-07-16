@@ -5,3 +5,9 @@ python-frontmatter>=1.1,<2
 pyyaml>=6.0,<7
 filelock>=3.12,<4            # cross-platform FileLock (WSL2 edge case 回避)
 pytest>=8,<10
+
+# wiki-tool-query マルチコネクタ（Phase A2）。互換範囲方針: 動作確認した
+# major.minor で上限を固定し、更新は明示的な bump コミットで行う
+psycopg[binary]>=3.3,<3.4    # PostgresConnector（named cursor / read_only）
+PyMySQL>=1.2,<1.3            # MySQLConnector（SSCursor）
+sqlglot>=30.12,<30.13        # 静的 SQL 検査層（relation allowlist）
