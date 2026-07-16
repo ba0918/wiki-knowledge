@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "tool_id": "sample-reports-web",
+      "type": "browser",
+      "flow": { "ref": "example_reports.py", "sha256": "f0dd2d81a55b95c8a3421b6cd6a42516860eac253f9c693218639d03a9b48d0c" },
+      "auth": {
+        "profile": "form+totp",
+        "credential_ref": "sample-reports-web",
+        "totp_credential_ref": "sample-reports-web-totp",
+        "username": "svc-readonly",
+        "session_ttl_hours": 8,
+        "login": {
+          "route": "login",
+          "username_label": "Username",
+          "password_label": "Password",
+          "totp_label": "One-time code",
+          "submit_role": "button",
+          "submit_name": "Sign in",
+          "success_url_contains": "/reports"
+        }
+      },
+      "origin_allowlist": [
+        { "method": "GET", "path_prefix": "/login", "resource_type": "document" },
+        { "method": "POST", "path_prefix": "/login", "resource_type": "document" },
+        { "method": "GET", "path_prefix": "/reports", "resource_type": "document" },
+        { "method": "GET", "path_prefix": "/reports", "resource_type": "other" }
+      ],
+      "tier": "B1",
+      "guarantees": {
+        "integrity": "guaranteed",
+        "identity": "guaranteed",
+        "filter_correctness": "guaranteed",
+        "completeness": "guaranteed",
+        "human_verification": "required"
+      },
+      "checks": [
+        { "check": "filter_readback", "param": "period" },
+        { "check": "row_count_range", "min": 1, "max": 100000 },
+        { "check": "ui_total_vs_file_rows" },
+        { "check": "primary_key_unique", "column": "user_id" },
+        { "check": "tenant_id_match", "expected_value": "acme" }
+      ],
+      "params_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "period": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$" }
+        }
+      },
+      "limits": {
+        "max_rows": 100000,
+        "max_result_bytes": 52428800,
+        "max_cell_bytes": 65536,
+        "max_artifact_bytes": 52428800,
+        "max_flow_seconds": 180,
+        "max_unapproved_bundles": 5
+      },
+      "retention": { "trace": "off", "screenshot": "off", "ttl_hours": 24 },
+      "delivery": { "allowed_dirs": ["outputs/deliveries"] },
+      "account": { "id": "acme", "origin": "https://reports.internal" }
+    }
+  ]
+}

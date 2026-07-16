@@ -840,6 +840,55 @@ class BrowserRunner:
             return _err(BrowserReason.SEAL_MISMATCH, "封印ハッシュが監査アンカーと不一致")
         return Ok(value={"artifact_digest": art_now, "manifest_digest": man_now})
 
+    # -- approve preview（読み取り専用・再導出 + アンカー照合。状態は変えない）------
+
+    def approve_preview(self, plan_id_text: str):
+        """承認材料を再導出して返す（状態は変えない）。TTY 提示の前段。
+
+        封印 artifact + manifest からハッシュを再導出し ``prepared`` 監査アンカーと
+        fail-closed 照合してから、manifest の件数・anchor 照合結果・封印時刻・TTL・
+        プレビュー行を返す。spool 内の保存プレビューは信用しない（§0）。
+        """
+
+        parsed = parse_plan_id(plan_id_text)
+        if is_err(parsed):
+            return _err(parsed.error, parsed.detail)
+        bundle_result = self._approval.resolve_bundle(parsed.value)
+        if is_err(bundle_result):
+            return bundle_result
+        bundle = bundle_result.value
+
+        verified = self._rederive_and_verify(bundle, parsed.value)
+        if is_err(verified):
+            return verified
+        try:
+            state = json.loads((bundle / "state.json").read_text(encoding="utf-8"))
+            manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return _err("bundle_missing", str(exc))
+        t = apply_transition(
+            BROWSER_TABLE, current=state.get("status", ""), target="approved"
+        )
+        if is_err(t):
+            return _err("not_approved", state.get("status", ""))
+        if is_expired(now=self._clock.now(), expires_at=state.get("expires_at", "")):
+            return _err("ttl_expired", state.get("expires_at", ""))
+        return Ok(
+            value={
+                "plan_id": parsed.value,
+                "tool_id": manifest.get("tool_id", _tool_id_of(parsed.value)),
+                "tier": manifest.get("tier"),
+                "row_count": manifest.get("row_count"),
+                "columns": manifest.get("columns", []),
+                "artifact_digest": verified.value["artifact_digest"],
+                "manifest_digest": verified.value["manifest_digest"],
+                "anchor_results": manifest.get("anchor_results", []),
+                "preview_rows": manifest.get("preview_rows", []),
+                "extracted_at": manifest.get("extracted_at"),
+                "expires_at": state.get("expires_at", ""),
+            }
+        )
+
     # -- approve -----------------------------------------------------------
 
     def approve(self, plan_id_text: str, *, approved_by: str):
@@ -1115,14 +1164,15 @@ def main(argv: list[str] | None = None) -> int:
         login_fn=_real_login_fn(wiki_root),
     )
 
+    if args.command == "approve":
+        return _run_approve(runner, args)
+
     try:
         if args.command == "prepare":
             params = dict(kv.split("=", 1) for kv in args.param)
             result = runner.prepare(
                 tool_id=args.tool, params=params, deliver_to=args.deliver_to
             )
-        elif args.command == "approve":
-            result = runner.approve(args.plan_id, approved_by=args.approved_by)
         elif args.command == "execute":
             result = runner.execute(args.plan_id)
         elif args.command == "doctor":
@@ -1140,6 +1190,61 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         _print_doctor(result.value, fmt=args.format)
         return 0 if all(s != "NG" for _, s, _ in result.value) else 1
+    if args.format == "json":
+        print(json.dumps(_outcome_json(result.value), ensure_ascii=False))
+    else:
+        print(_outcome_table(result.value))
+    return 0
+
+
+def _run_approve(runner: "BrowserRunner", args) -> int:
+    """approve の TTY 確認ゲート（人間操作、LLM 代行禁止）。
+
+    パイプ越しの自動承認を作らない（TTY 必須）。承認材料は封印 artifact + manifest の
+    再導出 + 監査アンカー照合を通したものだけを提示し、yes 入力後に commit する。
+    """
+
+    if not sys.stdin.isatty():
+        print(
+            "error: approve は対話 TTY でのみ実行できます"
+            "（パイプ・リダイレクト経由の承認は無効）",
+            file=sys.stderr,
+        )
+        return 2
+
+    preview = runner.approve_preview(args.plan_id)
+    if is_err(preview):
+        _print_error(str(preview.error))
+        return 1
+    p = preview.value
+
+    print("── 承認対象（seal-at-prepare）──", file=sys.stderr)
+    print(f"plan_id: {p['plan_id']}", file=sys.stderr)
+    print(f"tool: {p['tool_id']} / tier: {p['tier']}", file=sys.stderr)
+    print(f"artifact_digest: {p['artifact_digest']}", file=sys.stderr)
+    print(f"manifest_digest: {p['manifest_digest']}", file=sys.stderr)
+    print(f"取得件数: {p['row_count']} 件 / 列: {', '.join(p['columns'])}", file=sys.stderr)
+    for a in p["anchor_results"]:
+        mark = "OK" if a.get("passed") else f"NG({a.get('reason')})"
+        print(f"  anchor {a.get('check')}: {mark}", file=sys.stderr)
+    print(f"封印時刻: {p['extracted_at']} / TTL 期限: {p['expires_at']}", file=sys.stderr)
+    print("※ read-only は非強制（宣言フロー外操作をしない + 証跡）", file=sys.stderr)
+    print("※ 承認が制御するのは delivery のみ。抽出は既に完了している", file=sys.stderr)
+    if p["preview_rows"]:
+        print("プレビュー（先頭数行）:", file=sys.stderr)
+        for row in p["preview_rows"]:
+            print("  " + " | ".join(str(c) for c in row), file=sys.stderr)
+
+    print("承認しますか？（yes と入力で承認）: ", file=sys.stderr, end="", flush=True)
+    answer = sys.stdin.readline()
+    if answer.strip() != "yes":
+        print("未承認のまま終了します（bundle は prepared のまま）", file=sys.stderr)
+        return 1
+
+    result = runner.approve(args.plan_id, approved_by=args.approved_by)
+    if is_err(result):
+        _print_error(str(result.error))
+        return 1
     if args.format == "json":
         print(json.dumps(_outcome_json(result.value), ensure_ascii=False))
     else:

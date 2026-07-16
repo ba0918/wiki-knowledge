@@ -378,6 +378,12 @@ class TestExceptionSanitize:
         # 未知例外は internal_error に写像される（生テキストを通さない）
         assert reason in (BrowserReason.INTERNAL_ERROR, BrowserReason.FLOW_TIMEOUT)
 
+    def test_selector_error_maps_to_selector_not_found(self) -> None:
+        from lib.service.browser_flow_runner import FlowSelectorError
+
+        reason = sanitize_exception(FlowSelectorError("button[name='X'] 不在"))
+        assert reason == BrowserReason.SELECTOR_NOT_FOUND
+
 
 # ---------------------------------------------------------------------------
 # 実 chromium を要する E2E（smoke ゲート）

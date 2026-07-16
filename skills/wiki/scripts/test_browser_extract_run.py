@@ -583,3 +583,82 @@ class TestDoctorChromiumSmoke:
         with FixtureServer() as srv:
             status = self._doctor(_write_fixture_wiki(tmp_path, srv.base_url, route="nonexistent"))
         assert status["login_reachability"][0] == "NG"
+
+
+# ---------------------------------------------------------------------------
+# approve の TTY 確認ゲート（CLI 経路、chromium 非依存）
+#
+# approve は人間の TTY 操作。パイプ越しの自動承認を作らない。承認前に封印 artifact +
+# manifest からハッシュを再導出して prepared 監査アンカーと照合し、TTY で summary を
+# 提示し yes 入力を求めてから commit する。test-only の迂回は作らない（TTY monkeypatch のみ）。
+# ---------------------------------------------------------------------------
+
+
+class _FakeStdin:
+    def __init__(self, answer: str, *, tty: bool = True) -> None:
+        self._answer = answer
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def readline(self) -> str:
+        return self._answer
+
+
+def _prepared_plan(tmp_path: Path):
+    wiki_root = make_wiki(tmp_path)
+    runner = make_runner(wiki_root, FakeExtractor(result=sample_result()))
+    result = do_prepare(runner)
+    assert is_ok(result), result
+    return wiki_root, result.value.plan_id
+
+
+def _state_status(wiki_root: Path, plan_id: str) -> str:
+    state = json.loads((bundle_dir(wiki_root, plan_id) / "state.json").read_text())
+    return state["status"]
+
+
+class TestApproveTtyGate:
+    def test_non_tty_is_refused(self, tmp_path, monkeypatch):
+        wiki_root, plan_id = _prepared_plan(tmp_path)
+        monkeypatch.setattr(cli.sys, "stdin", _FakeStdin("yes\n", tty=False))
+        rc = cli.main(
+            ["--wiki-root", str(wiki_root), "approve", "--plan-id", plan_id,
+             "--approved-by", "me"]
+        )
+        assert rc == 2
+        assert _state_status(wiki_root, plan_id) == "prepared"
+
+    def test_tty_yes_commits_approval(self, tmp_path, monkeypatch):
+        wiki_root, plan_id = _prepared_plan(tmp_path)
+        monkeypatch.setattr(cli.sys, "stdin", _FakeStdin("yes\n"))
+        rc = cli.main(
+            ["--wiki-root", str(wiki_root), "approve", "--plan-id", plan_id,
+             "--approved-by", "me"]
+        )
+        assert rc == 0
+        assert _state_status(wiki_root, plan_id) == "approved"
+
+    def test_tty_no_leaves_unapproved(self, tmp_path, monkeypatch):
+        wiki_root, plan_id = _prepared_plan(tmp_path)
+        monkeypatch.setattr(cli.sys, "stdin", _FakeStdin("no\n"))
+        rc = cli.main(
+            ["--wiki-root", str(wiki_root), "approve", "--plan-id", plan_id,
+             "--approved-by", "me"]
+        )
+        assert rc == 1
+        assert _state_status(wiki_root, plan_id) == "prepared"
+
+    def test_tampered_bundle_is_rejected_even_with_yes(self, tmp_path, monkeypatch):
+        wiki_root, plan_id = _prepared_plan(tmp_path)
+        # 承認前に封印 artifact を書き換える（seal_mismatch を誘発）
+        art = bundle_dir(wiki_root, plan_id) / "artifact.bin"
+        art.write_bytes(art.read_bytes() + b"tampered")
+        monkeypatch.setattr(cli.sys, "stdin", _FakeStdin("yes\n"))
+        rc = cli.main(
+            ["--wiki-root", str(wiki_root), "approve", "--plan-id", plan_id,
+             "--approved-by", "me"]
+        )
+        assert rc == 1
+        assert _state_status(wiki_root, plan_id) == "prepared"
