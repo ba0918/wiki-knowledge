@@ -575,7 +575,41 @@ browser tool を作る前に必ず通す:
 6. **prepare → approve → execute** を一周
 
 fixture は正常系1件で済ませず**誤成功系 corpus**を用意し、各変異の拒否率と正常系の
-誤拒否を記録して語彙 v1 の過不足を定量評価する（Step 7 で実測）。
+誤拒否を記録して語彙 v1 の過不足を定量評価する。
+
+### B1 プロトタイプ実測（Step 7）
+
+検証契約 = filter_readback / row_count_range / ui_total_vs_file_rows /
+primary_key_unique / tenant_id_match の 5 check（正しさ 3 + 独立 anchor 3、重複含む）で、
+誤成功系 corpus 8 変異を `test_browser_extract_corpus.py` で実測した。フロー実行の成果
+（ExtractionResult）を fake 注入し、検証契約 enforce（browser 非依存の pure ロジック）を
+測っている。
+
+| 誤成功系変異 | 捕捉した check | 拒否 reason |
+|---|---|---|
+| filter 未反映 | filter_readback | `readback_mismatch` |
+| 別 tenant 同型画面（誤セレクタ） | tenant_id_match | `tenant_mismatch` |
+| pagination 欠落 | ui_total_vs_file_rows | `ui_total_mismatch` |
+| 部分 download | ui_total_vs_file_rows | `ui_total_mismatch` |
+| truncation | ui_total_vs_file_rows | `ui_total_mismatch` |
+| HTML エラーページ 200 | row_count_range | `row_count_out_of_range` |
+| 空結果 | row_count_range | `row_count_out_of_range` |
+| 主キー重複（二重取得） | primary_key_unique | `duplicate_primary_key` |
+
+**結果**: 8 変異すべて拒否（拒否率 100%）、正常系の誤拒否 0。
+
+**語彙 v1 の過不足に関する所見**:
+
+- **ui_total_vs_file_rows が完全性系（pagination/部分/truncation）の 3 変異を単独で捕捉**
+  している。これは「UI が示す総数」という独立 oracle が効いている証拠。UI に total 表示が
+  ない画面ではこの anchor を構成できず B2 降格になる（B1 の前提条件どおり）
+- **「値だけが違い、shape・件数・tenant が正常な誤セレクタ」は語彙単独では捕捉できない**
+  残余。tenant_id_match は tenant 境界の誤りは捕むが、同一 tenant 内で別の正常データを
+  掴む誤セレクタは検出圏外。この class は登録時の別主体レビュー（独立根拠 + 反証 fixture）と
+  filter_readback / row_count_range の併用で狭めるしかなく、v1 の既知の限界として記録する
+- artifact_hash / screen_fingerprint は本 corpus では未使用（前者は bundle→delivery の
+  完全性、後者は catalog 宣言の基準指紋を要する）。実サイト適用時に screen_fingerprint の
+  基準取得手順を詰める（次サイクル）
 
 ---
 
