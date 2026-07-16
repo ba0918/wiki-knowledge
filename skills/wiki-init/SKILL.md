@@ -42,7 +42,7 @@ description: >
      - 本文中の `{wiki_root}` も実パスに展開（`{slug}` 等は残す）
      - `SCOPE_DESCRIPTION` は目的が判別できれば1〜2文、できなければ「_スコープ未設定。最初の ingest 時に記述する_」
    - **AGENTS.md に既に `wiki_root` がある場合**: 既存値を保持
-   - **CLAUDE.md が存在しない場合**: `@AGENTS.md` のみを記述した `CLAUDE.md` を作成（`${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/claude-md-template.md` は使わない — あれは旧版の完全 standalone 用テンプレートで、現在の薄いラッパー方針とは合わない）
+   - **CLAUDE.md が存在しない場合**: `@AGENTS.md` のみを記述した `CLAUDE.md` を作成する
 5. 完了メッセージで次のステップ（wiki-ingest）を案内
 
 ## 完了メッセージ
