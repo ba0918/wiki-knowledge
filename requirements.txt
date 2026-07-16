@@ -1,12 +1,7 @@
-# Source-Agnostic Knowledge Pipeline — Python dependencies
-# Phase 0 で固定。実行環境は .venv (uv 管理) に uv pip install -r で集約する。
-#
-# 既存 .venv (pytest 9 / typing_extensions 4.15) に整合する形で緩めてある。
+# LLM Wiki Knowledge Base — skills/wiki/scripts の Python 依存
+# 実行環境は .venv (uv 管理) に uv pip install -r で集約する。
 
 python-frontmatter>=1.1,<2
 pyyaml>=6.0,<7
 filelock>=3.12,<4            # cross-platform FileLock (WSL2 edge case 回避)
-slack_sdk>=3.27,<4           # Phase 2 で使用
-tenacity>=8.2,<9              # rate limiter fallback（任意）
-pytest>=8,<10                 # 既存 .venv の 9.0.2 系と整合
-typing-extensions>=4.10,<6    # 既存 .venv の 4.15 系と整合
+pytest>=8,<10
