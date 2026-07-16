@@ -31,6 +31,7 @@ from lib.service.tool_catalog import (
     resolve_entry,
     validate_catalog,
 )
+from lib.service.tool_catalog import CredentialError, load_credential
 from lib.service.tool_paths import ToolPathError
 
 
@@ -502,3 +503,93 @@ class TestResolveDbPath:
         result = resolve_db_path(entry=entry, wiki_root=tmp_path)
         assert is_ok(result)
         assert result.value == tmp_path.resolve() / "dbs" / "events.sqlite3"
+
+
+# ---------------------------------------------------------------------------
+# load_credential（credential_ref 解決の enforcement）
+# ---------------------------------------------------------------------------
+
+
+class TestLoadCredential:
+    def _write_credentials(
+        self, tmp_path: Path, content: str, *, mode: int = 0o600
+    ) -> Path:
+        local = tmp_path / ".local"
+        local.mkdir(exist_ok=True)
+        path = local / "credentials.json"
+        path.write_text(content, encoding="utf-8")
+        path.chmod(mode)
+        return path
+
+    def test_resolves_value_by_ref(self, tmp_path: Path) -> None:
+        self._write_credentials(tmp_path, '{"events-ro": "hunter2"}')
+        result = load_credential(wiki_root=tmp_path, ref="events-ro")
+        assert is_ok(result)
+        assert result.value == "hunter2"
+
+    def test_missing_file_is_not_found(self, tmp_path: Path) -> None:
+        result = load_credential(wiki_root=tmp_path, ref="events-ro")
+        assert is_err(result)
+        assert result.error == CredentialError.NOT_FOUND
+
+    def test_group_or_world_readable_is_rejected(self, tmp_path: Path) -> None:
+        for mode in (0o644, 0o640, 0o606, 0o660):
+            self._write_credentials(
+                tmp_path, '{"events-ro": "hunter2"}', mode=mode
+            )
+            result = load_credential(wiki_root=tmp_path, ref="events-ro")
+            assert is_err(result), oct(mode)
+            assert result.error == CredentialError.BAD_PERMISSIONS
+
+    def test_stricter_than_0600_is_accepted(self, tmp_path: Path) -> None:
+        self._write_credentials(tmp_path, '{"events-ro": "hunter2"}', mode=0o400)
+        assert is_ok(load_credential(wiki_root=tmp_path, ref="events-ro"))
+
+    def test_symlink_is_rejected(self, tmp_path: Path) -> None:
+        real = tmp_path / "real-creds.json"
+        real.write_text('{"events-ro": "hunter2"}', encoding="utf-8")
+        real.chmod(0o600)
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "credentials.json").symlink_to(real)
+        result = load_credential(wiki_root=tmp_path, ref="events-ro")
+        assert is_err(result)
+        assert result.error == CredentialError.NOT_REGULAR_FILE
+
+    def test_symlinked_parent_directory_is_rejected(self, tmp_path: Path) -> None:
+        """`.local` 自体が symlink でも拒否（終端だけの lstat では抜けられる穴）。"""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        creds = outside / "credentials.json"
+        creds.write_text('{"events-ro": "hunter2"}', encoding="utf-8")
+        creds.chmod(0o600)
+        wiki = tmp_path / "wiki"
+        wiki.mkdir()
+        (wiki / ".local").symlink_to(outside)
+        result = load_credential(wiki_root=wiki, ref="events-ro")
+        assert is_err(result)
+        assert result.error == CredentialError.NOT_REGULAR_FILE
+
+    def test_non_regular_file_is_rejected(self, tmp_path: Path) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "credentials.json").mkdir()  # directory
+        result = load_credential(wiki_root=tmp_path, ref="events-ro")
+        assert is_err(result)
+        assert result.error == CredentialError.NOT_REGULAR_FILE
+
+    def test_malformed_structure_is_rejected(self, tmp_path: Path) -> None:
+        for bad in ("not json", "[1,2]", '{"ref": 123}'):
+            self._write_credentials(tmp_path, bad)
+            result = load_credential(wiki_root=tmp_path, ref="ref")
+            assert is_err(result), bad
+            assert result.error == CredentialError.MALFORMED
+
+    def test_unknown_ref_detail_names_ref_only(self, tmp_path: Path) -> None:
+        """エラー detail には ref 名のみ — 秘密値は決して載せない。"""
+        self._write_credentials(tmp_path, '{"events-ro": "hunter2"}')
+        result = load_credential(wiki_root=tmp_path, ref="no-such-ref")
+        assert is_err(result)
+        assert result.error == CredentialError.UNKNOWN_REF
+        assert "hunter2" not in result.detail
+        assert "no-such-ref" in result.detail

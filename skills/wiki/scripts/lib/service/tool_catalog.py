@@ -13,9 +13,12 @@ schema-of-record は ``{wiki_root}/schema/tool-catalog-schema.json``。実行時
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import re
+import stat as _stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -63,6 +66,16 @@ class CatalogError(str, Enum):
     INVALID_JSON = "invalid_json"
     SCHEMA_VIOLATION = "schema_violation"
     UNKNOWN_TOOL = "unknown_tool"
+
+
+class CredentialError(str, Enum):
+    """Discriminator for credential 解決の失敗。detail に秘密値は載せない。"""
+
+    NOT_FOUND = "credential_not_found"
+    NOT_REGULAR_FILE = "credential_not_regular_file"
+    BAD_PERMISSIONS = "credential_bad_permissions"
+    MALFORMED = "credential_malformed"
+    UNKNOWN_REF = "credential_unknown_ref"
 
 
 @dataclass(frozen=True)
@@ -297,6 +310,82 @@ def resolve_entry(
         if entry.tool_id == tool_id:
             return Ok(value=entry)
     return Err(error=CatalogError.UNKNOWN_TOOL, detail=tool_id)
+
+
+CREDENTIALS_RELATIVE_PATH = ".local/credentials.json"
+
+
+def load_credential(
+    *, wiki_root: Path, ref: str
+) -> Ok[str] | Err[CredentialError]:
+    """``{wiki_root}/.local/credentials.json`` から credential_ref で秘密値を引く。
+
+    enforcement: wiki_root への containment + **全 segment symlink 拒否**
+    （``.local`` 自体が symlink のケースを含む）/ ``O_NOFOLLOW`` で open して
+    **同一 fd** を fstat 検証と読み取りに使う（lookup を 1 回にして検査と
+    読み取りの間の差し替えを防ぐ）/ regular file / permission 0600 以下 /
+    構造検証。返り値の秘密値は接続にのみ使用し、呼び出し側はログ・stdout・
+    例外メッセージのいずれにも載せてはならない。本関数の detail も ref 名のみ。
+    """
+
+    resolved = resolve_no_symlink_path(
+        base=wiki_root, relative=CREDENTIALS_RELATIVE_PATH
+    )
+    if is_err(resolved):
+        if resolved.error in (
+            ToolPathError.SYMLINK_COMPONENT,
+            ToolPathError.SYMLINK_ESCAPE,
+        ):
+            return Err(
+                error=CredentialError.NOT_REGULAR_FILE,
+                detail="credentials.json への経路に symlink があります",
+            )
+        return Err(error=CredentialError.NOT_FOUND, detail=CREDENTIALS_RELATIVE_PATH)
+
+    try:
+        fd = os.open(resolved.value, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return Err(error=CredentialError.NOT_FOUND, detail=CREDENTIALS_RELATIVE_PATH)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return Err(
+                error=CredentialError.NOT_REGULAR_FILE,
+                detail="credentials.json は symlink 不可",
+            )
+        return Err(error=CredentialError.NOT_FOUND, detail=CREDENTIALS_RELATIVE_PATH)
+
+    try:
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            return Err(
+                error=CredentialError.NOT_REGULAR_FILE,
+                detail="credentials.json は regular file が必要",
+            )
+        if st.st_mode & 0o077:
+            return Err(
+                error=CredentialError.BAD_PERMISSIONS,
+                detail="credentials.json は 0600 が必要",
+            )
+        try:
+            with os.fdopen(fd, "r", encoding="utf-8") as f:
+                fd = -1  # fdopen が所有権を持つ（二重 close 防止）
+                data = json.load(f)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return Err(error=CredentialError.MALFORMED, detail="JSON として読めません")
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+    if not isinstance(data, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in data.items()
+    ):
+        return Err(
+            error=CredentialError.MALFORMED,
+            detail="{ref: 値(文字列)} のオブジェクトが必要",
+        )
+    if ref not in data:
+        return Err(error=CredentialError.UNKNOWN_REF, detail=ref)
+    return Ok(value=data[ref])
 
 
 def resolve_db_path(
