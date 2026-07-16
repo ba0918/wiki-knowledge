@@ -38,7 +38,6 @@ from lib.domain.tool_query import (
     evaluate_execute_matrix,
     is_expired,
     parse_plan_id,
-    precheck_sql,
     proposal_from_json_dict,
     proposal_to_json_bytes,
     sha256_hex,
@@ -55,8 +54,6 @@ from lib.service.tool_catalog import (
     Catalog,
     ToolEntry,
     load_catalog,
-    load_credential,
-    resolve_db_path,
     resolve_entry,
 )
 from lib.service.tool_connector import (
@@ -65,6 +62,13 @@ from lib.service.tool_connector import (
     ToolConnectorError,
     open_sqlite_connector,
 )
+from lib.service.tool_connector_http import HttpConnectorError
+from lib.service.tool_connector_registry import (
+    ConnectorProvider,
+    ConnectorRegistry,
+    default_registry,
+)
+from lib.service.tool_sql_gate import SqlGateError
 from lib.service.tool_delivery import (
     cell_size_bytes,
     cleanup_staging,
@@ -110,6 +114,12 @@ _POLICY_REASONS = frozenset(
         RejectReason.ROWS_OUT_OF_RANGE.value,
         ToolConnectorError.NOT_AUTHORIZED.value,
         ToolConnectorError.DEADLINE_EXCEEDED.value,
+    }
+    | {e.value for e in SqlGateError}
+    | {
+        HttpConnectorError.SPEC_INVALID.value,
+        HttpConnectorError.ENDPOINT_NOT_ALLOWED.value,
+        HttpConnectorError.RESPONSE_TOO_LARGE.value,
     }
 )
 
@@ -218,6 +228,7 @@ class ToolQueryRunner:
         monotonic: Callable[[], float] = time.monotonic,
         nonce: Callable[[], str] = _default_nonce,
         connector_factory: Callable[..., object] = open_sqlite_connector,
+        registry: ConnectorRegistry | None = None,
         audit: AuditLog | None = None,
         lock_timeout: float = 10.0,
     ) -> None:
@@ -227,6 +238,11 @@ class ToolQueryRunner:
         self._monotonic = monotonic
         self._nonce = nonce
         self._connector_factory = connector_factory
+        # sqlite factory は self 経由の遅延参照にする — テストが
+        # runner._connector_factory を差し替える既存 DI 面を registry 化後も保つ
+        self._registry = registry or default_registry(
+            sqlite_factory=lambda **kwargs: self._connector_factory(**kwargs)
+        )
         self._lock_timeout = lock_timeout
         self._audit = audit or AuditLog(
             wiki_root=self._wiki_root,
@@ -346,24 +362,18 @@ class ToolQueryRunner:
             )
         return Ok(value=(catalog, entry_result.value))
 
-    def _open_connector(self, entry: ToolEntry, deadline: float):
-        db_path = resolve_db_path(entry=entry, wiki_root=self._wiki_root)
-        if is_err(db_path):
-            return Err(error=_reason_value(db_path.error), detail=db_path.detail)
-        if entry.credential_ref is not None:
-            # sqlite はファイル接続のため値は使わないが、enforcement
-            # （0600 / regular file / symlink 拒否 / 構造検証）は必ず通す
-            credential = load_credential(
-                wiki_root=self._wiki_root, ref=entry.credential_ref
-            )
-            if is_err(credential):
-                return Err(
-                    error=_reason_value(credential.error), detail=credential.detail
-                )
-        result = self._connector_factory(
-            db_path=db_path.value,
-            allowed_tables=entry.allowed_tables,
-            max_cell_bytes=entry.limits.max_cell_bytes,
+    def _resolve_provider(self, entry: ToolEntry) -> Ok[ConnectorProvider] | Err:
+        resolved = self._registry.resolve(entry.type)
+        if is_err(resolved):
+            return Err(error=_reason_value(resolved.error), detail=resolved.detail)
+        return Ok(value=resolved.value)
+
+    def _open_connector(
+        self, provider: ConnectorProvider, entry: ToolEntry, deadline: float
+    ):
+        result = provider.open(
+            entry=entry,
+            wiki_root=self._wiki_root,
             deadline_monotonic=deadline,
             monotonic=self._monotonic,
         )
@@ -388,6 +398,10 @@ class ToolQueryRunner:
         if is_err(loaded):
             return loaded
         catalog, entry = loaded.value
+        provider_result = self._resolve_provider(entry)
+        if is_err(provider_result):
+            return provider_result
+        provider = provider_result.value
 
         labels_ok = validate_count_labels([c.label for c in count_sqls])
         if is_err(labels_ok):
@@ -415,9 +429,11 @@ class ToolQueryRunner:
         if is_err(read):
             return read
         sql_bytes, sql_text = read.value
-        pre = precheck_sql(sql_text)
+        # テキスト検査（SQL precheck + 静的 gate / http は request spec 検証）は
+        # provider が所有する — runner はテキストの種類を知らない
+        pre = provider.precheck(entry, sql_text)
         if is_err(pre):
-            return Err(error=_reason_value(pre.error), detail=pre.detail)
+            return pre
 
         count_payloads: list[tuple[CountSql, bytes, str]] = []
         for count in count_sqls:
@@ -425,12 +441,9 @@ class ToolQueryRunner:
             if is_err(read):
                 return read
             count_bytes, count_text = read.value
-            pre = precheck_sql(count_text)
+            pre = provider.precheck(entry, count_text, label=count.label)
             if is_err(pre):
-                return Err(
-                    error=_reason_value(pre.error),
-                    detail=f"count SQL {count.label!r}: {pre.detail}",
-                )
+                return pre
             count_payloads.append((count, count_bytes, count_text))
 
         plan_id = build_plan_id(
@@ -452,10 +465,10 @@ class ToolQueryRunner:
                 error=RunnerReason.AUDIT_WRITE_FAILED.value, detail=attempted.detail
             )
 
-        # dry-run COUNT は本実行と同じ enforcement（connector 三重防御 +
+        # dry-run COUNT は本実行と同じ enforcement（connector 防御 +
         # deadline）と監査記録を通す
         funnel_result = self._run_funnel_counts(
-            plan_id, entry, count_payloads, deadline
+            plan_id, provider, entry, count_payloads, deadline
         )
         if is_err(funnel_result):
             return funnel_result
@@ -524,6 +537,7 @@ class ToolQueryRunner:
     def _run_funnel_counts(
         self,
         plan_id: str,
+        provider: ConnectorProvider,
         entry: ToolEntry,
         count_payloads: list[tuple[CountSql, bytes, str]],
         deadline: float,
@@ -538,7 +552,7 @@ class ToolQueryRunner:
             )
             return Err(error=reason, detail=detail)
 
-        opened = self._open_connector(entry, deadline)
+        opened = self._open_connector(provider, entry, deadline)
         if is_err(opened):
             return _fail(_reason_value(opened.error), opened.detail)
         connector = opened.value
@@ -807,6 +821,10 @@ class ToolQueryRunner:
                 if is_err(entry_loaded):
                     return entry_loaded
                 catalog, entry = entry_loaded.value
+                provider_result = self._resolve_provider(entry)
+                if is_err(provider_result):
+                    return provider_result
+                provider = provider_result.value
                 limits = entry.limits
                 deadline = started + limits.timeout_sec
 
@@ -841,6 +859,14 @@ class ToolQueryRunner:
                     return Err(
                         error=_reason_value(matrix.error), detail=matrix.detail
                     )
+
+                # テキスト検査の再実施（defense in depth）— digest 一致で
+                # prepare 時と同一 bytes だが、承認を消費する前にもう一度
+                # 接続前検査を通す（消費後に拒否しても承認は戻らないため）
+                gate = provider.precheck(entry, sql_bytes.decode("utf-8"))
+                if is_err(gate):
+                    _audit_exec("rejected", reason=_reason_value(gate.error))
+                    return gate
 
                 # 監査前の deadline 境界（期限切れ後に承認を消費しない）
                 if self._remaining(deadline) <= 0:
@@ -877,13 +903,14 @@ class ToolQueryRunner:
 
         # --- consumed 済み: ここからの失敗で承認は復活しない ---
         return self._run_and_publish(
-            bundle, proposal, entry, sql_bytes, run_id, deadline, _audit_exec
+            bundle, proposal, provider, entry, sql_bytes, run_id, deadline, _audit_exec
         )
 
     def _run_and_publish(
         self,
         bundle: Path,
         proposal: Proposal,
+        provider: ConnectorProvider,
         entry: ToolEntry,
         sql_bytes: bytes,
         run_id: str,
@@ -923,7 +950,7 @@ class ToolQueryRunner:
                     ToolConnectorError.DEADLINE_EXCEEDED.value,
                     "全体 deadline を超過（接続前）",
                 )
-            opened = self._open_connector(entry, deadline)
+            opened = self._open_connector(provider, entry, deadline)
             if is_err(opened):
                 return _fail(_reason_value(opened.error), opened.detail)
             connector = opened.value

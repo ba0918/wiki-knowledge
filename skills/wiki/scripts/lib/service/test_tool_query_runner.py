@@ -1077,3 +1077,462 @@ class TestConcurrentExecute:
             if not p.name.startswith(".")
         ]
         assert len(finals) == 1
+
+
+# ---------------------------------------------------------------------------
+# マルチコネクタ（Phase A2）— registry 経由の provider 解決 + SQL gate 配線
+# ---------------------------------------------------------------------------
+
+from lib.service.tool_connector_mysql import FakeMySqlDriver  # noqa: E402
+from lib.service.tool_connector_pg import FakePgDriver  # noqa: E402
+from lib.service.tool_connector_registry import default_registry  # noqa: E402
+from lib.service.tool_sql_gate import SqlGateError  # noqa: E402
+
+PG_MAIN_SQL = "SELECT user_id, email FROM users ORDER BY user_id"
+PG_COUNT_SQL = "SELECT count(*) FROM users"
+
+
+def make_remote_wiki(
+    tmp_path: Path, *, ctype: str, allowed_tables: list[str] | None = None
+) -> Path:
+    """postgres / mysql entry + credential + delivery dir を持つ wiki_root。"""
+
+    wiki_root = tmp_path / f"{ctype}-wiki"
+    (wiki_root / "tools").mkdir(parents=True)
+    (wiki_root / "deliveries").mkdir()
+    (wiki_root / "outputs").mkdir()
+    (wiki_root / ".local").mkdir()
+    creds = wiki_root / ".local" / "credentials.json"
+    creds.write_text('{"remote-ro": "hunter2"}', encoding="utf-8")
+    creds.chmod(0o600)
+
+    catalog = {
+        "schema_version": 1,
+        "tools": [
+            {
+                "tool_id": "remote-db",
+                "type": ctype,
+                "connection": {
+                    "host": "db.example.com",
+                    "port": 5432 if ctype == "postgres" else 3306,
+                    "dbname": "appdb",
+                    "user": "readonly",
+                },
+                "credential_ref": "remote-ro",
+                "allowed_tables": allowed_tables or ["users"],
+                "limits": {
+                    "max_rows": 1000,
+                    "max_result_bytes": 1048576,
+                    "max_cell_bytes": 4096,
+                    "timeout_sec": 30,
+                },
+                "allowed_statements": ["select"],
+                "delivery": {"allowed_dirs": ["deliveries"]},
+            }
+        ],
+    }
+    (wiki_root / "tools" / "catalog.json").write_text(
+        json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return wiki_root
+
+
+def write_remote_sqls(
+    tmp_path: Path, *, main_sql: str = PG_MAIN_SQL
+) -> tuple[Path, list[CountSql]]:
+    sql_dir = tmp_path / "remote-sqls"
+    sql_dir.mkdir(exist_ok=True)
+    main = sql_dir / "main.sql"
+    main.write_text(main_sql, encoding="utf-8")
+    count = sql_dir / "count.sql"
+    count.write_text(PG_COUNT_SQL, encoding="utf-8")
+    return main, [CountSql(label="全件", path=count)]
+
+
+def scripted_result():
+    return {
+        PG_COUNT_SQL: (("count",), [(3,)]),
+        PG_MAIN_SQL: (
+            ("user_id", "email"),
+            [(1, "a@example.com"), (2, "b@example.com"), (3, "c@example.com")],
+        ),
+    }
+
+
+def do_remote_prepare(runner: ToolQueryRunner, tmp_path: Path, **overrides):
+    main_sql = overrides.pop("main_sql", PG_MAIN_SQL)
+    main, counts = write_remote_sqls(tmp_path, main_sql=main_sql)
+    args = dict(
+        tool_id="remote-db",
+        sql_path=main,
+        count_sqls=counts,
+        key_columns=("user_id",),
+        expected_rows=(3, 3),
+        deliver_to="deliveries",
+    )
+    args.update(overrides)
+    return runner.prepare(**args)
+
+
+class TestMultiConnectorE2E:
+    def test_pg_prepare_approve_execute_roundtrip(self, tmp_path: Path) -> None:
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        prepared = do_remote_prepare(runner, tmp_path)
+        assert is_ok(prepared), getattr(prepared, "detail", None)
+        assert prepared.value.funnel[0].row_count == 3
+        plan_id = prepared.value.plan_id
+        assert is_ok(approve(runner, plan_id))
+        result = runner.execute(plan_id)
+        assert is_ok(result), getattr(result, "detail", None)
+        outcome = result.value
+        assert outcome.row_count == 3
+        csv_text = (outcome.published_path / "result.csv").read_bytes().decode(
+            "utf-8"
+        )
+        assert csv_text == (
+            "user_id,email\r\n"
+            "1,a@example.com\r\n"
+            "2,b@example.com\r\n"
+            "3,c@example.com\r\n"
+        )
+        # 接続契約: password が driver に渡り、read-only が transaction 前に設定
+        assert driver.connect_kwargs["password"] == "hunter2"
+        for conn in driver.connections:
+            set_ro = conn.events.index(("set_read_only", True))
+            begin = next(
+                i for i, e in enumerate(conn.events) if e[0] == "begin"
+            )
+            assert set_ro < begin
+        assert audit_events(wiki_root)[-1] == "published"
+
+    def test_mysql_prepare_approve_execute_roundtrip(self, tmp_path: Path) -> None:
+        wiki_root = make_remote_wiki(tmp_path, ctype="mysql")
+        driver = FakeMySqlDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(mysql_driver=driver)
+        )
+        prepared = do_remote_prepare(runner, tmp_path)
+        assert is_ok(prepared), getattr(prepared, "detail", None)
+        plan_id = prepared.value.plan_id
+        assert is_ok(approve(runner, plan_id))
+        result = runner.execute(plan_id)
+        assert is_ok(result), getattr(result, "detail", None)
+        assert result.value.row_count == 3
+        # session 契約: SET READ ONLY → max_execution_time → START TRANSACTION
+        conn = driver.connections[0]
+        executed = [e[1] for e in conn.events if e[0] == "execute"]
+        assert executed[0] == "SET SESSION TRANSACTION READ ONLY"
+        assert executed[2] == "START TRANSACTION"
+
+    def test_credential_never_leaks_into_outputs(self, tmp_path: Path) -> None:
+        """password は stdout 相当（Outcome）・監査・bundle のどこにも出ない。"""
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        prepared = do_remote_prepare(runner, tmp_path)
+        plan_id = prepared.value.plan_id
+        assert is_ok(approve(runner, plan_id))
+        assert is_ok(runner.execute(plan_id))
+        audit_text = (
+            wiki_root / "outputs" / "toolquery-audit.jsonl"
+        ).read_text(encoding="utf-8")
+        assert "hunter2" not in audit_text
+        bundle = wiki_root / "outputs" / "toolquery-plans" / plan_id
+        for path in bundle.rglob("*"):
+            if path.is_file():
+                assert "hunter2" not in path.read_text(encoding="utf-8"), path
+
+
+class TestSqlGateWiring:
+    def test_pg_prepare_rejects_relation_outside_allowlist(
+        self, tmp_path: Path
+    ) -> None:
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        result = do_remote_prepare(
+            runner,
+            tmp_path,
+            main_sql="SELECT * FROM users u JOIN secrets s ON u.id = s.uid",
+        )
+        assert is_err(result)
+        assert result.error == SqlGateError.RELATION_NOT_ALLOWED.value
+        # 静的検査は接続前 — driver には一切触れない
+        assert driver.connect_kwargs is None
+
+    def test_pg_prepare_rejects_dml_hidden_in_cte(self, tmp_path: Path) -> None:
+        """precheck（WITH 開始）を通過しても gate が CTE 内 DML を拒否する。"""
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        result = do_remote_prepare(
+            runner,
+            tmp_path,
+            main_sql="WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x",
+        )
+        assert is_err(result)
+        assert result.error == SqlGateError.STATEMENT_NOT_ALLOWED.value
+        assert driver.connect_kwargs is None
+
+    def test_count_sql_is_also_gated(self, tmp_path: Path) -> None:
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        sql_dir = tmp_path / "gated-counts"
+        sql_dir.mkdir()
+        main = sql_dir / "main.sql"
+        main.write_text(PG_MAIN_SQL, encoding="utf-8")
+        bad_count = sql_dir / "count.sql"
+        bad_count.write_text("SELECT count(*) FROM secrets", encoding="utf-8")
+        result = runner.prepare(
+            tool_id="remote-db",
+            sql_path=main,
+            count_sqls=[CountSql(label="全件", path=bad_count)],
+            key_columns=("user_id",),
+            expected_rows=(3, 3),
+            deliver_to="deliveries",
+        )
+        assert is_err(result)
+        assert result.error == SqlGateError.RELATION_NOT_ALLOWED.value
+        assert driver.connect_kwargs is None
+
+    def test_sqlite_path_does_not_invoke_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """sqlite は authorizer 持ち — 静的 gate は介在しない（回帰ガード）。"""
+        from lib.service import tool_connector_registry
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("sqlite パスで SQL gate が呼ばれた")
+
+        monkeypatch.setattr(tool_connector_registry, "check_sql", _fail)
+        wiki_root = make_wiki(tmp_path)
+        runner = make_runner(wiki_root)
+        prepared = do_prepare(runner, tmp_path, expected_rows=(3, 3))
+        assert is_ok(prepared), getattr(prepared, "detail", None)
+        plan_id = prepared.value.plan_id
+        assert is_ok(approve(runner, plan_id))
+        assert is_ok(runner.execute(plan_id))
+
+    def test_execute_reapplies_gate_as_defense_in_depth(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        wiki_root = make_remote_wiki(tmp_path, ctype="postgres")
+        driver = FakePgDriver(script=scripted_result())
+        runner = make_runner(
+            wiki_root, registry=default_registry(pg_driver=driver)
+        )
+        from lib.service import tool_connector_registry
+
+        calls: list[str] = []
+        real_check = tool_connector_registry.check_sql
+
+        def counting_check(sql, **kwargs):
+            calls.append(sql)
+            return real_check(sql, **kwargs)
+
+        monkeypatch.setattr(tool_connector_registry, "check_sql", counting_check)
+        prepared = do_remote_prepare(runner, tmp_path)
+        plan_id = prepared.value.plan_id
+        prepare_calls = len(calls)
+        assert prepare_calls >= 2  # main + count
+        assert is_ok(approve(runner, plan_id))
+        assert is_ok(runner.execute(plan_id))
+        assert len(calls) > prepare_calls  # execute でも再検査される
+
+
+# ---------------------------------------------------------------------------
+# http connector の E2E（fake transport、prepare → approve → execute）
+# ---------------------------------------------------------------------------
+
+from lib.service.tool_connector_http import (  # noqa: E402
+    FakeTransport,
+    FakeTransportResponse,
+)
+
+
+def make_http_wiki(tmp_path: Path) -> Path:
+    wiki_root = tmp_path / "http-wiki"
+    (wiki_root / "tools").mkdir(parents=True)
+    (wiki_root / "deliveries").mkdir()
+    (wiki_root / "outputs").mkdir()
+    (wiki_root / ".local").mkdir()
+    creds = wiki_root / ".local" / "credentials.json"
+    creds.write_text('{"redash-key": "hunter2"}', encoding="utf-8")
+    creds.chmod(0o600)
+    catalog = {
+        "schema_version": 1,
+        "tools": [
+            {
+                "tool_id": "redash-api",
+                "type": "http",
+                "connection": {
+                    "base_url": "https://redash.example.com",
+                    "allowed_endpoints": [
+                        {"method": "POST", "path_prefix": "/api/queries"},
+                        {"method": "GET", "path_prefix": "/api/counts"},
+                    ],
+                    "auth_header_name": "Authorization",
+                    "auth_header_template": "Key {credential}",
+                },
+                "credential_ref": "redash-key",
+                "limits": {
+                    "max_rows": 1000,
+                    "max_result_bytes": 1048576,
+                    "max_cell_bytes": 4096,
+                    "timeout_sec": 30,
+                    "max_response_bytes": 8388608,
+                },
+                "delivery": {"allowed_dirs": ["deliveries"]},
+            }
+        ],
+    }
+    (wiki_root / "tools" / "catalog.json").write_text(
+        json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return wiki_root
+
+
+HTTP_MAIN_SPEC = {
+    "method": "POST",
+    "path": "/api/queries/42/results",
+    "body": {"max_age": 0},
+    "records_path": "query_result.data.rows",
+    "columns": ["user_id", "email"],
+}
+HTTP_COUNT_SPEC = {
+    "method": "GET",
+    "path": "/api/counts/total",
+    "count_path": "count",
+}
+
+
+def write_http_specs(tmp_path: Path) -> tuple[Path, list[CountSql]]:
+    spec_dir = tmp_path / "http-specs"
+    spec_dir.mkdir(exist_ok=True)
+    main = spec_dir / "main.json"
+    main.write_text(json.dumps(HTTP_MAIN_SPEC), encoding="utf-8")
+    count = spec_dir / "count.json"
+    count.write_text(json.dumps(HTTP_COUNT_SPEC), encoding="utf-8")
+    return main, [CountSql(label="全件", path=count)]
+
+
+def http_transport() -> FakeTransport:
+    count_body = json.dumps({"count": 2}).encode("utf-8")
+    main_body = json.dumps(
+        {
+            "query_result": {
+                "data": {
+                    "rows": [
+                        {"user_id": 1, "email": "a@example.com"},
+                        {"user_id": 2, "email": "b@example.com"},
+                    ]
+                }
+            }
+        }
+    ).encode("utf-8")
+    return FakeTransport(
+        FakeTransportResponse(body=count_body),
+        FakeTransportResponse(body=main_body),
+    )
+
+
+class TestHttpConnectorE2E:
+    def test_http_prepare_approve_execute_roundtrip(self, tmp_path: Path) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        transport = http_transport()
+        runner = make_runner(
+            wiki_root, registry=default_registry(http_transport=transport)
+        )
+        main, counts = write_http_specs(tmp_path)
+        prepared = runner.prepare(
+            tool_id="redash-api",
+            sql_path=main,
+            count_sqls=counts,
+            key_columns=("user_id",),
+            expected_rows=(2, 2),
+            deliver_to="deliveries",
+        )
+        assert is_ok(prepared), getattr(prepared, "detail", None)
+        assert prepared.value.funnel[0].row_count == 2
+        plan_id = prepared.value.plan_id
+        assert is_ok(approve(runner, plan_id))
+        result = runner.execute(plan_id)
+        assert is_ok(result), getattr(result, "detail", None)
+        assert result.value.row_count == 2
+        csv_text = (
+            (result.value.published_path / "result.csv").read_bytes().decode("utf-8")
+        )
+        assert csv_text == (
+            "user_id,email\r\n1,a@example.com\r\n2,b@example.com\r\n"
+        )
+        # 認証ヘッダは送信されるが、成果物・監査には現れない
+        assert dict(transport.requests[0].headers)["Authorization"] == "Key hunter2"
+        audit_text = (wiki_root / "outputs" / "toolquery-audit.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert "hunter2" not in audit_text
+
+    def test_http_prepare_rejects_endpoint_outside_allowlist(
+        self, tmp_path: Path
+    ) -> None:
+        wiki_root = make_http_wiki(tmp_path)
+        transport = http_transport()
+        runner = make_runner(
+            wiki_root, registry=default_registry(http_transport=transport)
+        )
+        spec_dir = tmp_path / "bad-specs"
+        spec_dir.mkdir()
+        main = spec_dir / "main.json"
+        main.write_text(
+            json.dumps({**HTTP_MAIN_SPEC, "path": "/admin/keys"}),
+            encoding="utf-8",
+        )
+        count = spec_dir / "count.json"
+        count.write_text(json.dumps(HTTP_COUNT_SPEC), encoding="utf-8")
+        result = runner.prepare(
+            tool_id="redash-api",
+            sql_path=main,
+            count_sqls=[CountSql(label="全件", path=count)],
+            key_columns=("user_id",),
+            expected_rows=(2, 2),
+            deliver_to="deliveries",
+        )
+        assert is_err(result)
+        assert result.error == "http_endpoint_not_allowed"
+        assert transport.requests == []  # 送信前に拒否
+
+    def test_http_sql_text_is_rejected_as_spec(self, tmp_path: Path) -> None:
+        """http tool に SQL ファイルを渡しても spec 検証で fail closed。"""
+        wiki_root = make_http_wiki(tmp_path)
+        runner = make_runner(
+            wiki_root, registry=default_registry(http_transport=http_transport())
+        )
+        spec_dir = tmp_path / "sqlish"
+        spec_dir.mkdir()
+        main = spec_dir / "main.sql"
+        main.write_text("SELECT * FROM users", encoding="utf-8")
+        count = spec_dir / "count.json"
+        count.write_text(json.dumps(HTTP_COUNT_SPEC), encoding="utf-8")
+        result = runner.prepare(
+            tool_id="redash-api",
+            sql_path=main,
+            count_sqls=[CountSql(label="全件", path=count)],
+            key_columns=("user_id",),
+            expected_rows=(2, 2),
+            deliver_to="deliveries",
+        )
+        assert is_err(result)
+        assert result.error == "http_spec_invalid"

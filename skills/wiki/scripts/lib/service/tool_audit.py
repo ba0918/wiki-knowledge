@@ -31,8 +31,11 @@ from lib.service.file_lock import FileLock, FileLockTimeout
 from lib.service.path_validator import ID_PATTERN
 from lib.service.tool_catalog import CatalogError, CredentialError
 from lib.service.tool_connector import ToolConnectorError
+from lib.service.tool_connector_http import HttpConnectorError
+from lib.service.tool_connector_registry import RegistryError
 from lib.service.tool_delivery import DeliveryError
 from lib.service.tool_paths import ToolPathError
+from lib.service.tool_sql_gate import SqlGateError
 
 
 AUDIT_RELATIVE_PATH = "outputs/toolquery-audit.jsonl"
@@ -46,9 +49,15 @@ AUDIT_EVENTS = (
     "executed",
     "published",
     "failed",
+    # 診断イベント（plan 非依存）— doctor サブコマンドが記録する
+    "doctor",
 )
 
-AUDIT_SUBCOMMANDS = ("prepare", "approve", "execute", "catalog-validate")
+AUDIT_SUBCOMMANDS = ("prepare", "approve", "execute", "catalog-validate", "doctor")
+
+# plan に紐付かない診断イベント。plan_id は None でなければならない
+# （状態遷移イベントは逆に plan_id 必須）。
+PLAN_INDEPENDENT_EVENTS = frozenset({"doctor"})
 
 # runner（lib/service/tool_query_runner.py の RunnerReason）が所有する reason code。
 # runner は audit に依存するため直接 import すると循環になる — ここに列挙し、
@@ -76,6 +85,9 @@ ALLOWED_REASONS = frozenset(
     | {e.value for e in CredentialError}
     | {e.value for e in DeliveryError}
     | {e.value for e in ToolPathError}
+    | {e.value for e in SqlGateError}
+    | {e.value for e in RegistryError}
+    | {e.value for e in HttpConnectorError}
     | set(RUNNER_REASON_VALUES)
 )
 
@@ -93,7 +105,7 @@ class AuditEvent:
     """1 イベント分のメタデータ。値（結果行・条件値）を持つフィールドはない。"""
 
     event: str
-    plan_id: str
+    plan_id: str | None  # doctor（plan 非依存）のみ None
     tool_id: str
     subcommand: str
     sql_digest: str | None = None
@@ -119,7 +131,10 @@ def _validate_event(event: AuditEvent) -> str | None:
 
     if event.event not in AUDIT_EVENTS:
         return f"未知のイベント: {event.event!r}"
-    if is_err(parse_plan_id(event.plan_id)):
+    if event.event in PLAN_INDEPENDENT_EVENTS:
+        if event.plan_id is not None:
+            return "診断イベント（doctor）に plan_id は載せない"
+    elif event.plan_id is None or is_err(parse_plan_id(event.plan_id)):
         return "plan_id が生成形式ではない"
     if not isinstance(event.tool_id, str) or not _ID_RE.fullmatch(event.tool_id):
         return "tool_id が slug 形式ではない"

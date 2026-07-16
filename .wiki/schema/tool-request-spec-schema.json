@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tool Request Spec",
+  "description": "wiki-tool-query の http connector が実行する request spec。SQL ファイルの代わりに --request-file / --count-request で渡す（digest binding・bundle 保存は SQL と同一経路）。実行時検証は skills/wiki/scripts/lib/service/tool_connector_http.py の parse_request_spec が担い（真実源）、本 schema との構造制約同期は test_tool_connector_http.py::TestRequestSpecSchemaSync が機械検証する。records_path + columns（行データ取得）または count_path（ファネル COUNT、単一の非負整数）のどちらか一方を宣言する。相関制約（body は POST のみ・query 値やキーの制御文字禁止など draft-07 で表現しにくい cross-field 制約）は validator が所有し、この構造 schema には含めない。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["method", "path"],
+  "properties": {
+    "method": {
+      "enum": ["GET", "POST"]
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "base_url origin からの相対パス。canonicalize（encoded separator 拒否・dot segment 解決・segment 境界照合）を経て allowed_endpoints と照合される。scheme・authority・fragment・query（spec.query を使う）は不可"
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "integer"]
+      },
+      "description": "query string は本 mapping からのみ構築する（path への直書きは拒否）"
+    },
+    "body": {
+      "type": "object",
+      "description": "POST のみ。JSON として送信される"
+    },
+    "records_path": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$",
+      "description": "レスポンス JSON から行配列を取り出す dot-path（配列 index・ワイルドカードなし）"
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "列順を固定する。record が object なら key で射影、配列なら位置で射影（長さ一致必須）。重複列は不可"
+    },
+    "count_path": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$",
+      "description": "ファネル COUNT 用 — 単一の非負整数を指す dot-path"
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["records_path", "columns"]
+    },
+    {
+      "required": ["count_path"]
+    }
+  ]
+}

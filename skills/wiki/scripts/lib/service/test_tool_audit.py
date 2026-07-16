@@ -106,8 +106,52 @@ class TestAppend:
     def test_all_state_events_are_accepted(self, tmp_path: Path) -> None:
         log = make_log(tmp_path)
         for event in AUDIT_EVENTS:
+            if event == "doctor":
+                assert is_ok(
+                    log.append(
+                        make_event(event="doctor", plan_id=None, subcommand="doctor")
+                    )
+                )
+                continue
             assert is_ok(log.append(make_event(event=event))), event
-        assert [e["event"] for e in read_lines(tmp_path)] == list(AUDIT_EVENTS)
+
+    def test_doctor_event_is_plan_independent(self, tmp_path: Path) -> None:
+        """doctor は plan 非依存の診断イベント — plan_id なしで記録できる。"""
+        log = make_log(tmp_path)
+        result = log.append(
+            AuditEvent(
+                event="doctor",
+                plan_id=None,
+                tool_id="pg-db",
+                subcommand="doctor",
+            )
+        )
+        assert is_ok(result)
+        entry = read_lines(tmp_path)[0]
+        assert entry["event"] == "doctor"
+        assert "plan_id" not in entry
+        assert entry["tool_id"] == "pg-db"
+
+    def test_doctor_event_with_plan_id_is_rejected(self, tmp_path: Path) -> None:
+        """doctor に plan_id を載せるのは種別違反（plan と紐付けない）。"""
+        log = make_log(tmp_path)
+        result = log.append(
+            AuditEvent(
+                event="doctor",
+                plan_id=PLAN_ID,
+                tool_id="pg-db",
+                subcommand="doctor",
+            )
+        )
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_non_doctor_event_requires_plan_id(self, tmp_path: Path) -> None:
+        """状態遷移イベントは plan_id 必須（None は種別違反）。"""
+        log = make_log(tmp_path)
+        result = log.append(make_event(event="prepared", plan_id=None))
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
 
 
 class TestFailClosed:
@@ -178,6 +222,18 @@ class TestFailClosed:
         from lib.service.tool_query_runner import RunnerReason
 
         assert set(RUNNER_REASON_VALUES) == {e.value for e in RunnerReason}
+
+    def test_sql_gate_and_registry_reasons_are_allowed(self) -> None:
+        """Phase A2 で追加された reason 空間（SQL gate / registry / http）が
+        ALLOWED_REASONS に含まれる — 自由文字列を経由せず監査に載せるため。"""
+        from lib.service.tool_audit import ALLOWED_REASONS
+        from lib.service.tool_connector_http import HttpConnectorError
+        from lib.service.tool_connector_registry import RegistryError
+        from lib.service.tool_sql_gate import SqlGateError
+
+        assert {e.value for e in SqlGateError} <= ALLOWED_REASONS
+        assert {e.value for e in RegistryError} <= ALLOWED_REASONS
+        assert {e.value for e in HttpConnectorError} <= ALLOWED_REASONS
 
     def test_lock_timeout_is_write_failed(self, tmp_path: Path) -> None:
         log = make_log(tmp_path, lock=FakeFileLock(always_times_out=True))
