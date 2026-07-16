@@ -2,7 +2,7 @@
 """QueryLog statistics: aggregate query log data and report usage metrics.
 
 Usage:
-    python querylog-stats.py --wiki-root .wiki
+    python querylog_stats.py --wiki-root .wiki
 
 Output: JSON to stdout with query statistics.
 """

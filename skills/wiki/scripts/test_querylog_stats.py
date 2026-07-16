@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for querylog-stats.py."""
+"""Tests for querylog_stats.py."""
 
 import json
 import sys
@@ -250,7 +250,7 @@ class TestMainIntegration:
         from unittest.mock import patch
 
         with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-            with patch("sys.argv", ["querylog-stats.py", "--wiki-root", str(wiki_root)]):
+            with patch("sys.argv", ["querylog_stats.py", "--wiki-root", str(wiki_root)]):
                 qs_main()
 
         output = json.loads(mock_stdout.getvalue())
@@ -269,7 +269,7 @@ class TestMainIntegration:
         from unittest.mock import patch
 
         with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-            with patch("sys.argv", ["querylog-stats.py", "--wiki-root", str(wiki_root)]):
+            with patch("sys.argv", ["querylog_stats.py", "--wiki-root", str(wiki_root)]):
                 qs_main()
 
         output = json.loads(mock_stdout.getvalue())
