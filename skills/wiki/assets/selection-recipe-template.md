@@ -39,6 +39,24 @@ related: []
 `NOT IN (SELECT ...)` は副問い合わせに NULL が混ざると三値論理で**全行が落ちる**ため、
 除外条件は相関 `NOT EXISTS` で書く。
 
+> **http tool の場合**: SQL の代わりに request spec（JSON）を組む。抽出条件はクエリ側
+> （Redash の query パラメータ / ES の DSL）で表現し、Recipe には「どの endpoint に何を
+> 渡し、レスポンスのどこ（`records_path`）を列（`columns`）に射影するか」を書く。
+>
+> ```json
+> {
+>   "method": "POST",
+>   "path": "/api/queries/42/results",
+>   "body": { "max_age": 0 },
+>   "records_path": "query_result.data.rows",
+>   "columns": ["user_id", "email"]
+> }
+> ```
+>
+> ファネル COUNT は `count_path`（単一の非負整数を指す dot-path。Redash の件数クエリや
+> ES の `_count` エンドポイント）で表現する。URL は canonicalize 後に endpoint allowlist と
+> 照合され、allowlist 外・リダイレクトは拒否される。
+
 ## ファネル構成
 
 承認者が検算しやすい順に条件を足す:

@@ -1,15 +1,24 @@
 ---
 name: wiki-tool-query
 description: >
-  catalog 登録済みデータソース（sqlite）への制約・監査付きアドホック集計を、dry-run 承認フローで実行する。
+  catalog 登録済みデータソース（sqlite / postgres / mysql / HTTP API）への制約・監査付きアドホック集計を、dry-run 承認フローで実行する。
   「補填対象者を抽出して」「DB から対象者リストを出して」「アドホック集計」「tool query」で使用する。
-  Selection Recipe 記事（practices）を参照して SQL を組み、prepare → 人間承認 → execute で結果 CSV を delivery する。
+  Selection Recipe 記事（practices）を参照して SQL / request spec を組み、prepare → 人間承認 → execute で結果 CSV を delivery する。
 ---
 
 # Wiki Tool Query
 
 catalog 登録済みデータソースへの「自由な質問 + 制約された実行」。LLM が SQL を組んでよいが、
 実行前に dry-run 計画（対象定義・選定ファネル・想定件数レンジ）を人間が承認する。
+
+**対応 connector**（catalog の `type` で決まる。承認フロー・監査・delivery・single-use は全 type 共通）:
+
+- `sqlite` — ローカル DB ファイル（read-only URI + PRAGMA + authorizer）
+- `postgres` / `mysql` — リモート DB（read-only role + 静的 SQL 検査 + session read-only）
+- `http` — 汎用 JSON API（Redash / Kibana(ES) / 社内 API。SQL の代わりに request spec を渡す）
+
+connector 別の書き方・read-only role 設定・TLS・request spec・保証範囲の詳細は
+[tool-query-guide.md](../wiki/references/tool-query-guide.md)。接続の事前診断は `doctor`（後述）。
 
 **wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。
 
@@ -30,6 +39,8 @@ catalog が実行契約の真実源であり、Wiki 記事（Selection Recipe）
 
 ### 2. prepare（dry-run）
 
+SQL 系 tool（sqlite / postgres / mysql）:
+
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
   --wiki-root {wiki_root} --tool <tool_id> \
@@ -38,9 +49,20 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
   --key-columns <col>... --expected-rows <min>:<max> --deliver-to <dir> --format json
 ```
 
+http tool は SQL の代わりに **request spec ファイル**（JSON）を渡す（`--sql-file` は使えない）:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
+  --wiki-root {wiki_root} --tool <http_tool_id> \
+  --request-file <main.request.json> \
+  --count-request "<段の説明>=<count.request.json>" \
+  --key-columns <col>... --expected-rows <min>:<max> --deliver-to <dir> --format json
+```
+
 - **承認前に COUNT だけは走る**: prepare のファネル COUNT は本実行と同じ enforcement
-  （read-only 三重防御 / allowed_tables / timeout）と監査記録を通る。このことをユーザーに明示する
+  （connector 防御 / allowed_tables or endpoint allowlist / timeout）と監査記録を通る。ユーザーに明示する
 - 生成された immutable proposal bundle（`outputs/toolquery-plans/{plan_id}/`）が以後の唯一の実行対象
+- request spec の書き方（records_path / count_path / URL canonicalization / メモリモデル）は guide 参照
 
 ### 3. 承認依頼（summary-first で提示）
 
@@ -118,10 +140,36 @@ receipt の記録失敗）は、その旨をテンプレートに追記して報
 - 依頼受領時刻を実施記録（Recipe 記事の実施ログ節）に残す（所要時間計測の起点。終点は監査ログの published、
   承認待ちは approved イベントで控除）
 
+## doctor（接続とリモート enforcement の事前診断）
+
+リモート DB / API を登録したら、実行前に `doctor` で接続・read-only role・delivery を診断する:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py doctor \
+  --wiki-root {wiki_root} [--tool <id>] [--probe-write <tool-id>] --format table
+```
+
+- 固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`。exit 0 = 必須 OK / 1 = NG / 2 = usage
+- read-only は独立 check（`session_readonly` / `role_grants`）に分解。`role_write_denial` と
+  機械検証外の権限（CREATE / TEMPORARY / EXECUTE）は **SKIP** を明示（無言で流さない）
+- doctor は結果データに触れない（COUNT すら実行しない）。監査は plan 非依存の `doctor` イベント
+- `--probe-write`（二重 opt-in）は canary relation への INSERT が拒否されることを確認する。詳細は guide
+
 ## 保証範囲（ユーザーに聞かれたら答える・誇張しない）
 
-**守る**: 承認後の SQL・ファネル・delivery 先の*偶発的*変更・取り違え・陳腐化（catalog 変更後の実行）・
-再実行（replay）の検出と拒否。read-only 逸脱・allowlist 外アクセス・上限超過の拒否。
+**守る**: 承認後の SQL / request spec・ファネル・delivery 先の*偶発的*変更・取り違え・陳腐化
+（catalog 変更後の実行）・再実行（replay）の検出と拒否。read-only 逸脱・allowlist 外アクセス・
+上限超過の拒否。
+
+**connector 別の保証範囲**:
+
+- **sqlite**: authorizer（実行エンジン自身の判定）による read-only 三重防御
+- **postgres / mysql**: 保証は「DB 側 read-only role（第一防御）+ 静的 SQL 検査 + session read-only」の
+  **組み合わせ**。role を SELECT 専用にしないと防御が縮む（guide の role 設定手順が前提）。
+  MySQL の read-only transaction は一時テーブル DML を許容する穴があり、role 側で
+  `CREATE TEMPORARY TABLES` を付与しないことで塞ぐ。**MariaDB は検証対象外**
+- **http**: endpoint allowlist + method 制限 + レスポンスサイズ上限で守る。クエリ内容（ES / Redash の
+  DSL）の静的検証はしない。非同期 job / polling は非対応（one-shot JSON API のみ）
 
 **守らない（PoC の限定）**:
 
@@ -136,7 +184,10 @@ receipt の記録失敗）は、その旨をテンプレートに追記して報
 
 ## 制約（スクリプトが enforcement する）
 
-- SELECT / WITH のみ（複文・コメント開始不可）。read-only 三重防御 + relation allowlist（catalog の `allowed_tables`）
+- SQL 系: SELECT / WITH のみ（複文・コメント開始・未知関数不可）。connector 別 read-only 防御 +
+  relation allowlist（catalog の `allowed_tables`。pg/mysql は sqlglot 静的検査）
+- http: endpoint allowlist（method + segment 境界の path prefix）+ URL canonicalize + リダイレクト拒否 +
+  レスポンスサイズ上限（`max_response_bytes`）
 - 出力上限: catalog の `limits`（max_rows / max_result_bytes / max_cell_bytes / timeout_sec）
 - 結果データは delivery 先に引き渡して非保持。監査ログ（`outputs/toolquery-audit.jsonl`）は
   値を含まないメタデータのみ
