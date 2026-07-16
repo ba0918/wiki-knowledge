@@ -453,11 +453,12 @@ FIXED_TIMEZONE = "UTC"
 FIXED_VIEWPORT = {"width": 1280, "height": 900}
 
 
-def build_launch_kwargs(user_data_dir: Path) -> dict:
+def build_launch_kwargs(user_data_dir: Path, *, headless: bool = True) -> dict:
     """封じ込め launch の kwargs（guide §7）。本番・smoke で同一経路を使う。
 
     service_workers='block' / WebRTC 無効化 launch args / remote debugging port なし /
-    locale・timezone・viewport 固定 / ephemeral user-data-dir。
+    locale・timezone・viewport 固定 / ephemeral user-data-dir。``headless=False`` は
+    human-assisted login（headed だが抽出・delivery 経路なし）専用。
 
     session state は ``launch_persistent_context`` の引数にできない（``storage_state`` は
     ``new_context`` 専用）ため、launch 後に :func:`apply_storage_state` で復元する。
@@ -465,7 +466,7 @@ def build_launch_kwargs(user_data_dir: Path) -> dict:
 
     return {
         "user_data_dir": str(user_data_dir),
-        "headless": True,
+        "headless": headless,
         "args": list(CHROMIUM_LAUNCH_ARGS),
         "service_workers": "block",
         "locale": FIXED_LOCALE,
@@ -550,6 +551,7 @@ def contained_context(
     on_block: Callable[[], None] | None = None,
     default_timeout_ms: int = 30_000,
     on_setup: Callable[[object, Path], None] | None = None,
+    headless: bool = True,
 ) -> Iterator[object]:
     """封じ込め済み context を yield し、``finally`` で確実に teardown する（guide §13）。
 
@@ -562,7 +564,7 @@ def contained_context(
     context = None
     try:
         context = pw.chromium.launch_persistent_context(
-            **build_launch_kwargs(user_data_dir)
+            **build_launch_kwargs(user_data_dir, headless=headless)
         )
         context.set_default_timeout(default_timeout_ms)
         install_interception(context, rules, on_block=on_block)

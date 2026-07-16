@@ -97,6 +97,39 @@
                 "type": "string",
                 "pattern": "^https://"
               }
+            },
+            "username": {
+              "type": "string",
+              "description": "form / form+totp のログイン識別子（非秘密。password は credential_ref、TOTP secret は totp_credential_ref で解決する）。",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "totp_credential_ref": {
+              "type": "string",
+              "description": "form+totp の TOTP secret（base32）を解決する credential_ref。",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$"
+            },
+            "login": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "form / form+totp の自動フォームログイン設定（capability API と同じく値バインディングのセレクタのみ）。",
+              "required": [
+                "route",
+                "username_label",
+                "password_label",
+                "submit_role",
+                "submit_name",
+                "success_url_contains"
+              ],
+              "properties": {
+                "route": { "type": "string", "minLength": 1 },
+                "username_label": { "type": "string", "minLength": 1 },
+                "password_label": { "type": "string", "minLength": 1 },
+                "totp_label": { "type": "string", "minLength": 1 },
+                "submit_role": { "type": "string", "minLength": 1 },
+                "submit_name": { "type": "string", "minLength": 1 },
+                "success_url_contains": { "type": "string", "minLength": 1 }
+              }
             }
           }
         },

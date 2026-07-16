@@ -309,6 +309,7 @@ class BrowserRunner:
         nonce: Callable[[], str],
         lock_timeout: float = 10.0,
         monotonic: Callable[[], float] = time.monotonic,
+        login_fn: Callable | None = None,
     ) -> None:
         self._wiki_root = Path(wiki_root)
         self._clock = clock
@@ -316,6 +317,8 @@ class BrowserRunner:
         self._extractor = extractor
         self._nonce = nonce
         self._monotonic = monotonic
+        # form / form+totp の自動ログイン（実体は headless form login、テストは fake 注入）
+        self._login_fn = login_fn
         self._audit = AuditLog(
             wiki_root=self._wiki_root,
             lock=lock,
@@ -369,7 +372,10 @@ class BrowserRunner:
         if cap >= entry.limits.max_unapproved_bundles:
             return _err(BrowserReason.BUNDLE_CAP_EXCEEDED, f"未承認 {cap} 本")
 
-        session_state = None  # profile=none。form 系は session store から解決（Step 7）
+        resolved = self._resolve_session_state(entry)
+        if is_err(resolved):
+            return resolved
+        session_state = resolved.value
         deadline = self._monotonic() + entry.limits.max_flow_seconds
         extracted = self._extractor.extract(
             entry=entry,
@@ -499,6 +505,62 @@ class BrowserRunner:
             )
         )
 
+    # -- session 解決（form / form+totp）-----------------------------------
+
+    def _resolve_session_state(self, entry):
+        """profile に応じて session_state を解決する（none=None / form 系=store or 自動login）。
+
+        form / form+totp: session store に有効な束縛済み session があれば再利用、無ければ
+        ``login_fn`` で捕捉して 0600 保存し再利用する。human-assisted: store 必須
+        （無ければ session_expired → login サブコマンドを hint）。
+        """
+
+        from lib.service.browser_session_store import (
+            SessionBinding,
+            load_session,
+            save_session,
+        )
+        from lib.domain.types import is_ok
+
+        profile = entry.auth.profile
+        if profile == "none":
+            return Ok(value=None)
+
+        binding = SessionBinding(
+            tool_id=entry.tool_id,
+            origin=entry.account.origin.rstrip("/"),
+            account=entry.account.id,
+        )
+        loaded = load_session(
+            wiki_root=self._wiki_root, binding=binding, now=self._clock.now()
+        )
+        if is_ok(loaded):
+            return Ok(value=loaded.value)
+
+        if profile in ("form", "form+totp"):
+            if self._login_fn is None:
+                return _err(BrowserReason.SESSION_EXPIRED, "自動ログインが未設定")
+            captured = self._login_fn(entry)
+            if is_err(captured):
+                return captured
+            ttl_hours = entry.auth.session_ttl_hours or entry.retention.ttl_hours
+            expires_at = compute_expires_at(
+                created_at=self._clock.now(), ttl_hours=ttl_hours
+            )
+            saved = save_session(
+                wiki_root=self._wiki_root,
+                binding=binding,
+                storage_state=captured.value,
+                captured_at=self._clock.now(),
+                expires_at=expires_at,
+            )
+            if is_err(saved):
+                return _err(BrowserReason.SESSION_EXPIRED, "session 保存に失敗")
+            return Ok(value=captured.value)
+
+        # human-assisted は login サブコマンドでの捕捉が前提
+        return _err(BrowserReason.SESSION_EXPIRED, "login サブコマンドで捕捉が必要")
+
     # -- doctor（接続の事前診断・データ非接触）-----------------------------
 
     def doctor(self, tool_id: str):
@@ -543,6 +605,8 @@ class BrowserRunner:
         if not os.environ.get("BROWSER_EXTRACT_SMOKE"):
             checks.append(("login_reachability", "SKIP", "BROWSER_EXTRACT_SMOKE 未設定"))
             checks.append(("selector_exists", "SKIP", "BROWSER_EXTRACT_SMOKE 未設定"))
+        else:
+            checks.extend(self._doctor_chromium(entry))
 
         self._audit.append(
             AuditEvent(
@@ -551,14 +615,81 @@ class BrowserRunner:
         )
         return Ok(value=tuple(checks))
 
+    def _doctor_chromium(self, entry):  # pragma: no cover - smoke（実 chromium）
+        """login 疎通 + selector 実在を実 chromium で診断する（データ非接触の範囲で）。
+
+        honest scoping（guide §16）: doctor はデータ非接触を主張しない。ログインページへの
+        遷移と selector 実在確認はログイン副作用を持つが、**抽出・成果物生成はしない**。
+        trace / screenshot は記録しない。login_reachability = 遷移到達、selector_exists =
+        login フォームの username/password/submit の実在。
+        """
+
+        from lib.service.browser_flow_runner import contained_context, sanitize_exception
+        from lib.service.browser_login import login_rules
+
+        results: list[tuple[str, str, str]] = []
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            results.append(("login_reachability", "SKIP", "playwright 未導入"))
+            results.append(("selector_exists", "SKIP", "playwright 未導入"))
+            return results
+
+        login = entry.auth.login
+        if login is None:
+            results.append(("login_reachability", "SKIP", "login 設定なし profile"))
+            results.append(("selector_exists", "SKIP", "login 設定なし profile"))
+            return results
+
+        origin = entry.account.origin.rstrip("/")
+        try:
+            with sync_playwright() as pw:
+                with contained_context(
+                    pw, rules=login_rules(entry), default_timeout_ms=8000
+                ) as context:
+                    page = context.new_page()
+                    resp = page.goto(origin + "/" + login.route.strip("/"))
+                    if resp is not None and resp.status < 400:
+                        results.append(("login_reachability", "OK", login.route))
+                    else:
+                        status = resp.status if resp is not None else "none"
+                        results.append(
+                            ("login_reachability", "NG", f"status={status}")
+                        )
+                    missing: list[str] = []
+                    if page.get_by_label(login.username_label).count() == 0:
+                        missing.append("username")
+                    if page.get_by_label(login.password_label).count() == 0:
+                        missing.append("password")
+                    if (
+                        page.get_by_role(
+                            login.submit_role, name=login.submit_name
+                        ).count()
+                        == 0
+                    ):
+                        missing.append("submit")
+                    if missing:
+                        results.append(
+                            ("selector_exists", "NG", ",".join(missing) + " 欠落")
+                        )
+                    else:
+                        results.append(("selector_exists", "OK", "login form"))
+        except BaseException as exc:  # noqa: BLE001 - 生例外を通さない
+            reason = sanitize_exception(exc)
+            results.append(("login_reachability", "NG", reason.value))
+            results.append(("selector_exists", "SKIP", "login 未到達"))
+        return results
+
     # -- login（human-assisted の session 捕捉・束縛のみ、抽出・delivery なし）---
 
-    def login(self, tool_id: str):  # pragma: no cover - smoke（headed chromium）
+    def login(self, tool_id: str):
         """human-assisted profile 用: 人間ログイン → session state を捕捉・束縛する。
 
         headed で起動するが**抽出・delivery の経路を持たない**（session state の捕捉と
         束縛メタデータ付与のみ）。捕捉直後に有効性を検証し、束縛メタ（tool/origin/
-        account）と TTL を人間に表示する。実 chromium を要するため smoke ゲート下。
+        account）と TTL を人間に表示する。headed 部は実 chromium + 人間操作を要するため
+        自動テスト対象外（Non-Goal）。捕捉後の finalize（束縛・0600 保存・有効性検証）は
+        browser_login.finalize_capture が担い常時実行テストで検証する。
         """
 
         loaded = self._load_entry(tool_id)
@@ -567,19 +698,86 @@ class BrowserRunner:
         entry = loaded.value
         if entry.auth.profile != "human-assisted":
             return _err("params_invalid", "login は human-assisted profile 専用")
-        try:
-            from playwright.sync_api import sync_playwright  # noqa: F401
-        except ImportError:
-            return _err(
-                BrowserReason.INTERNAL_ERROR, "playwright 未インストール（login は headed）"
-            )
-        # 実 chromium での headed 捕捉 + 有効性検証 + session store 保存は smoke で実装
+
+        captured = self._capture_human_login(entry)
+        if is_err(captured):
+            return captured
+        storage_state = captured.value
+
+        from lib.service.browser_login import finalize_capture
+
+        ttl_hours = entry.auth.session_ttl_hours or entry.retention.ttl_hours
+        expires_at = compute_expires_at(
+            created_at=self._clock.now(), ttl_hours=ttl_hours
+        )
+        final = finalize_capture(
+            wiki_root=self._wiki_root,
+            entry=entry,
+            storage_state=storage_state,
+            now_iso=self._clock.now(),
+            expires_at=expires_at,
+        )
+        if is_err(final):
+            return _err(final.error, getattr(final, "detail", ""))
+
         self._audit.append(
             AuditEvent(
                 event="login", plan_id=None, tool_id=tool_id, subcommand="login"
             )
         )
-        return Ok(value={"status": "login_captured", "tool_id": tool_id})
+        return Ok(value={"status": "login_captured", **final.value})
+
+    def _capture_human_login(self, entry):  # pragma: no cover - headed（人間操作）
+        """headed ブラウザで人間ログインを待ち、storage_state を捕捉する。
+
+        完了検知: post-login URL / セレクタ検知 + TTY Enter 待ちフォールバック +
+        タイムアウト（guide §10）。抽出・delivery の経路は持たない。
+        """
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return _err(BrowserReason.INTERNAL_ERROR, "playwright 未インストール")
+
+        from lib.service.browser_flow_runner import contained_context
+        from lib.service.browser_login import login_rules
+
+        origin = entry.account.origin.rstrip("/")
+        start = origin + (
+            "/" + entry.auth.login.route.strip("/") if entry.auth.login else "/"
+        )
+        success = (
+            entry.auth.login.success_url_contains if entry.auth.login else None
+        )
+        try:
+            with sync_playwright() as pw:
+                with contained_context(
+                    pw,
+                    rules=login_rules(entry),
+                    default_timeout_ms=300_000,
+                    headless=False,
+                ) as context:
+                    page = context.new_page()
+                    page.goto(start)
+                    print(
+                        "ブラウザでログインしてください。完了後にこのターミナルで "
+                        "Enter を押してください…",
+                        file=sys.stderr,
+                    )
+                    if success:
+                        try:
+                            page.wait_for_url("**" + success + "**", timeout=300_000)
+                        except BaseException:  # noqa: BLE001 - Enter フォールバック
+                            pass
+                    try:
+                        input()
+                    except EOFError:
+                        pass
+                    return Ok(value=context.storage_state())
+        except BaseException as exc:  # noqa: BLE001 - 生例外を通さない
+            from lib.service.browser_flow_runner import sanitize_exception
+
+            return _err(sanitize_exception(exc), "")
 
     def _count_unapproved(self, tool_id: str) -> int:
         plans_root = self._wiki_root / PLANS_RELATIVE
@@ -914,6 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
         lock=RealFileLock(),
         extractor=_real_extractor(wiki_root),
         nonce=lambda: os.urandom(2).hex(),
+        login_fn=_real_login_fn(wiki_root),
     )
 
     try:
@@ -965,6 +1164,40 @@ def _real_extractor(wiki_root: Path):  # pragma: no cover - smoke
     from lib.service.browser_flow_runner import BrowserFlowRunner
 
     return BrowserFlowRunner(wiki_root=wiki_root, monotonic=time.monotonic)
+
+
+def _real_login_fn(wiki_root: Path):  # pragma: no cover - smoke（実 chromium）
+    """form / form+totp の自動ログイン: credential 解決 + headless form login。"""
+
+    def login_fn(entry):
+        from lib.service.browser_login import form_login
+        from lib.service.tool_catalog import load_credential
+
+        password = load_credential(
+            wiki_root=wiki_root, ref=entry.auth.credential_ref
+        )
+        if is_err(password):
+            return _err(BrowserReason.SESSION_EXPIRED, "credential 解決に失敗")
+        totp_secret = None
+        if entry.auth.profile == "form+totp":
+            secret = load_credential(
+                wiki_root=wiki_root, ref=entry.auth.totp_credential_ref
+            )
+            if is_err(secret):
+                return _err(BrowserReason.SESSION_EXPIRED, "TOTP secret 解決に失敗")
+            totp_secret = secret.value
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            return form_login(
+                pw,
+                entry=entry,
+                username=entry.auth.username,
+                password=password.value,
+                totp_secret=totp_secret,
+            )
+
+    return login_fn
 
 
 def _outcome_json(outcome) -> dict:

@@ -145,11 +145,27 @@ class FlowRef:
 
 
 @dataclass(frozen=True)
+class LoginConfig:
+    """form / form+totp の自動フォームログイン設定（値バインディングのセレクタのみ）。"""
+
+    route: str
+    username_label: str
+    password_label: str
+    submit_role: str
+    submit_name: str
+    success_url_contains: str
+    totp_label: str | None = None
+
+
+@dataclass(frozen=True)
 class AuthConfig:
     profile: str
     credential_ref: str | None = None
     session_ttl_hours: int | None = None
     login_origins: tuple[str, ...] = ()
+    username: str | None = None
+    totp_credential_ref: str | None = None
+    login: LoginConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -288,6 +304,61 @@ def _validate_check(where: str, raw: object) -> list[str]:
     return errors
 
 
+_LOGIN_REQUIRED = (
+    "route",
+    "username_label",
+    "password_label",
+    "submit_role",
+    "submit_name",
+    "success_url_contains",
+)
+_LOGIN_OPTIONAL = ("totp_label",)
+
+
+def _validate_auth_login(where: str, auth: dict, profile: object) -> list[str]:
+    """auth.login 構造 + form / form+totp の相関必須制約を検証する。"""
+
+    errors: list[str] = []
+    login = auth.get("login")
+    if login is not None:
+        if not isinstance(login, dict):
+            errors.append(f"{where}: auth.login がオブジェクトではない")
+        else:
+            for key in login:
+                if key not in _LOGIN_REQUIRED + _LOGIN_OPTIONAL:
+                    errors.append(f"{where}: auth.login の未知のキー: {key}")
+            for field_name in _LOGIN_REQUIRED:
+                val = login.get(field_name)
+                if not (isinstance(val, str) and val):
+                    errors.append(
+                        f"{where}: auth.login.{field_name} は非空文字列が必要"
+                    )
+            if "totp_label" in login and not (
+                isinstance(login["totp_label"], str) and login["totp_label"]
+            ):
+                errors.append(f"{where}: auth.login.totp_label は非空文字列")
+
+    # form / form+totp は自動フォームログインの材料を必須にする
+    if profile in ("form", "form+totp"):
+        if not (isinstance(auth.get("username"), str) and auth.get("username")):
+            errors.append(f"{where}: auth.username は form / form+totp で必須")
+        if not (
+            isinstance(auth.get("credential_ref"), str) and auth.get("credential_ref")
+        ):
+            errors.append(f"{where}: auth.credential_ref は form / form+totp で必須")
+        if not isinstance(login, dict):
+            errors.append(f"{where}: auth.login は form / form+totp で必須")
+    if profile == "form+totp":
+        if not (
+            isinstance(auth.get("totp_credential_ref"), str)
+            and auth.get("totp_credential_ref")
+        ):
+            errors.append(f"{where}: auth.totp_credential_ref は form+totp で必須")
+        if not (isinstance(login, dict) and login.get("totp_label")):
+            errors.append(f"{where}: auth.login.totp_label は form+totp で必須")
+    return errors
+
+
 def _validate_entry(index: int, entry: object) -> list[str]:
     where = f"tools[{index}]"
     if not isinstance(entry, dict):
@@ -323,14 +394,18 @@ def _validate_entry(index: int, entry: object) -> list[str]:
     if not isinstance(auth, dict):
         errors.append(f"{where}: auth がオブジェクトではない")
     else:
-        if auth.get("profile") not in AUTH_PROFILES:
-            errors.append(f"{where}: auth.profile が未知: {auth.get('profile')!r}")
+        profile = auth.get("profile")
+        if profile not in AUTH_PROFILES:
+            errors.append(f"{where}: auth.profile が未知: {profile!r}")
         for key in auth:
             if key not in (
                 "profile",
                 "credential_ref",
                 "session_ttl_hours",
                 "login_origins",
+                "username",
+                "totp_credential_ref",
+                "login",
             ):
                 errors.append(f"{where}: auth の未知のキー: {key}")
         origins = auth.get("login_origins", [])
@@ -338,6 +413,7 @@ def _validate_entry(index: int, entry: object) -> list[str]:
             isinstance(o, str) and _HTTPS_ORIGIN_RE.match(o) for o in origins
         ):
             errors.append(f"{where}: auth.login_origins は https URL の配列")
+        errors.extend(_validate_auth_login(where, auth, profile))
 
     allowlist = entry["origin_allowlist"]
     if not isinstance(allowlist, list) or not allowlist:
@@ -496,6 +572,20 @@ def _to_check(raw: dict) -> Check:
 
 def _to_entry(raw: dict) -> BrowserToolEntry:
     auth = raw["auth"]
+    login_raw = auth.get("login")
+    login_cfg = (
+        LoginConfig(
+            route=login_raw["route"],
+            username_label=login_raw["username_label"],
+            password_label=login_raw["password_label"],
+            submit_role=login_raw["submit_role"],
+            submit_name=login_raw["submit_name"],
+            success_url_contains=login_raw["success_url_contains"],
+            totp_label=login_raw.get("totp_label"),
+        )
+        if isinstance(login_raw, dict)
+        else None
+    )
     return BrowserToolEntry(
         tool_id=raw["tool_id"],
         flow=FlowRef(ref=raw["flow"]["ref"], sha256=raw["flow"]["sha256"]),
@@ -504,6 +594,9 @@ def _to_entry(raw: dict) -> BrowserToolEntry:
             credential_ref=auth.get("credential_ref"),
             session_ttl_hours=auth.get("session_ttl_hours"),
             login_origins=tuple(auth.get("login_origins", ())),
+            username=auth.get("username"),
+            totp_credential_ref=auth.get("totp_credential_ref"),
+            login=login_cfg,
         ),
         origin_allowlist=tuple(
             OriginRule(

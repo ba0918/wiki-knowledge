@@ -278,6 +278,30 @@ schema に持たせ、manifest・監査にも未保証事項を出力する。
 | `form+totp` | フォーム + TOTP | credentials.json（TOTP secret） |
 | `human-assisted` | 人間ログイン → session state 引き継ぎ | `login` サブコマンドで捕捉 |
 
+### form / form+totp の自動フォームログイン設定（catalog `auth`）
+
+form / form+totp は prepare の session 解決時に自動フォームログインする。catalog `auth` に
+以下を宣言する（値バインディングのセレクタのみ。文字列補間しない）:
+
+- `username`: ログイン識別子（**非秘密**。catalog field）
+- `credential_ref`: password を解決する ref（`.local/credentials.json`）
+- `totp_credential_ref`: TOTP secret（base32）を解決する ref（form+totp のみ必須）
+- `login`: `{route, username_label, password_label, submit_role, submit_name,
+  success_url_contains}`（+ form+totp は `totp_label`）。完了検知は post-login URL
+  （`success_url_contains`）— 遷移しなければ timeout → `session_expired`（wrong creds の検出線）
+
+session 解決の順序（`browser_extract_run._resolve_session_state`）: profile=none → session なし /
+form 系 → session store に有効な束縛 session があれば再利用、無ければ headless form login で捕捉
+して 0600 保存し再利用 / human-assisted → store 必須（無ければ `login` サブコマンドを hint）。
+TOTP は RFC 6238（`browser_login.totp_code`、stdlib hmac が真実源。fixture も re-export）。
+
+### doctor の chromium 疎通（`BROWSER_EXTRACT_SMOKE` 時）
+
+doctor は browser 非依存の検査（catalog resolve / flow pin / AST / params_schema）に加え、
+smoke 時のみ実 chromium で `login_reachability`（login route への遷移到達）と
+`selector_exists`（login フォームの username/password/submit の実在）を OK/NG 判定する。
+抽出・成果物生成はしない（データ非接触は主張しない honest scoping、§16）。
+
 - session state は credential と同格の封じ込め（0600・TTL・再認証ポリシー）
 - **tool / origin / account に束縛**する: state ファイルに束縛メタデータ
   （`tool_id` / `origin` / `account`）を持たせ、実行時に catalog 宣言と照合する。

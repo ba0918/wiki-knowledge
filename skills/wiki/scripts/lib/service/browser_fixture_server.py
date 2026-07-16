@@ -26,11 +26,13 @@ import base64
 import hashlib
 import hmac
 import html
-import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+# TOTP 生成の真実源は browser_login（production util）。fixture は re-export する。
+from lib.service.browser_login import totp_code
 
 
 # fixture 専用のダミー credential（実サービスのものは使わない）
@@ -47,18 +49,6 @@ _ROWS = ((1, "a@example.com"), (2, "b@example.com"), (3, "c@example.com"))
 # ---------------------------------------------------------------------------
 # TOTP（RFC 6238、stdlib のみ）
 # ---------------------------------------------------------------------------
-
-
-def totp_code(secret_b32: str, *, at_unix: float, step: int = 30, digits: int = 6) -> str:
-    """base32 secret から指定時刻の TOTP を計算する（RFC 6238 / HMAC-SHA1）。"""
-
-    key = base64.b32decode(secret_b32)
-    counter = int(at_unix // step)
-    msg = struct.pack(">Q", counter)
-    digest = hmac.new(key, msg, hashlib.sha1).digest()
-    offset = digest[-1] & 0x0F
-    binary = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
-    return str(binary % (10**digits)).zfill(digits)
 
 
 def _totp_valid(secret_b32: str, code: str, *, now: float) -> bool:

@@ -32,7 +32,19 @@ def valid_entry(**overrides) -> dict:
         "tool_id": "events-web",
         "type": "browser",
         "flow": {"ref": "events_web.py", "sha256": "a" * 64},
-        "auth": {"profile": "form", "credential_ref": "events-login"},
+        "auth": {
+            "profile": "form",
+            "credential_ref": "events-login",
+            "username": "svc-readonly",
+            "login": {
+                "route": "login",
+                "username_label": "Username",
+                "password_label": "Password",
+                "submit_role": "button",
+                "submit_name": "Sign in",
+                "success_url_contains": "/reports",
+            },
+        },
         "origin_allowlist": [
             {
                 "method": "GET",
@@ -148,6 +160,54 @@ class TestCatalogValidation:
         entry["danger"] = True
         errors = validate_browser_catalog(catalog(entry))
         assert any("danger" in e for e in errors)
+
+    def test_form_profile_requires_username(self) -> None:
+        entry = valid_entry()
+        del entry["auth"]["username"]
+        errors = validate_browser_catalog(catalog(entry))
+        assert any("username" in e for e in errors)
+
+    def test_form_profile_requires_login_block(self) -> None:
+        entry = valid_entry()
+        del entry["auth"]["login"]
+        errors = validate_browser_catalog(catalog(entry))
+        assert any("login" in e for e in errors)
+
+    def test_form_profile_requires_credential_ref(self) -> None:
+        entry = valid_entry()
+        del entry["auth"]["credential_ref"]
+        errors = validate_browser_catalog(catalog(entry))
+        assert any("credential_ref" in e for e in errors)
+
+    def test_form_totp_requires_totp_credential_ref_and_label(self) -> None:
+        entry = valid_entry()
+        entry["auth"]["profile"] = "form+totp"
+        # totp_credential_ref も login.totp_label も無い → 両方が指摘される
+        errors = validate_browser_catalog(catalog(entry))
+        assert any("totp_credential_ref" in e for e in errors)
+        assert any("totp_label" in e for e in errors)
+
+    def test_form_totp_with_totp_fields_passes(self) -> None:
+        entry = valid_entry()
+        entry["auth"]["profile"] = "form+totp"
+        entry["auth"]["totp_credential_ref"] = "events-totp"
+        entry["auth"]["login"]["totp_label"] = "One-time code"
+        assert validate_browser_catalog(catalog(entry)) == []
+
+    def test_none_profile_needs_no_login(self) -> None:
+        entry = valid_entry()
+        entry["auth"] = {"profile": "none"}
+        assert validate_browser_catalog(catalog(entry)) == []
+
+    def test_parse_exposes_login_config(self) -> None:
+        result = parse_browser_catalog(catalog(valid_entry()))
+        assert is_ok(result), result
+        auth = result.value[0].auth
+        assert auth.username == "svc-readonly"
+        assert auth.login is not None
+        assert auth.login.route == "login"
+        assert auth.login.submit_name == "Sign in"
+        assert auth.login.success_url_contains == "/reports"
 
     def test_duplicate_tool_id_is_rejected(self) -> None:
         errors = validate_browser_catalog(catalog(valid_entry(), valid_entry()))
