@@ -731,6 +731,23 @@ honest scoping（実測しないもの）:
   正規化は空 segment として拒否する。照合前に browser 側で吸収する（`//` 等の多重スラッシュは
   path 混同攻撃面として拒否のまま）
 
+### smoke の運用上の位置づけ（レビュー指摘の受容）
+
+セキュリティ中核の実ブラウザ接合部（interception の実 abort・form login の実捕捉・
+teardown/udd purge・誤成功系変異の実拒否 E2E）は `BROWSER_EXTRACT_SMOKE` ゲート下に**のみ**
+存在する。常時実行テストは判定ロジックを fake 相手に検証するが、Playwright 配線の退行は
+smoke でしか検出できない。**browser 系統に触れる変更をコミットする前は smoke をローカル実行
+すること**（CI は本リポジトリに未整備。実行手順は AGENTS.md「Browser Extract」節）。
+
+### catalog 作成者向けの footgun 注記
+
+- `account.origin` は**素の文字列一致**で照合される（request 側だけが正規化される）。
+  origin は小文字・default port（:443/:80）省略で書くこと — 大文字や `:443` 明示は
+  正当なリクエストを誤ブロックする（fail-closed 方向なので事故だが漏れではない）
+- `origin_allowlist` の `resource_type` に列挙されない同一 origin のリソース
+  （script / stylesheet / image 等）も abort される。実ページが必要とする resource type を
+  列挙しないと画面が壊れる（doctor / smoke で顕在化する）
+
 ### supply chain 注記
 
 chromium バイナリは Playwright の公式 CDN（`playwright.download.prss.microsoft.com` 系）から
