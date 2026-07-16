@@ -21,7 +21,6 @@ exit: 0=成功 / 1=拒否・失敗 / 2=usage / 130=SIGINT。
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys

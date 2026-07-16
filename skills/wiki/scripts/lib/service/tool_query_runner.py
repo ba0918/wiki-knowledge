@@ -51,8 +51,6 @@ from lib.service.clock import Clock
 from lib.service.file_lock import FileLock
 from lib.service.tool_approval import (
     ApprovalService,
-    fsync_dir as _fsync_dir,
-    write_bytes_durable as _write_bytes_durable,
     write_json_durable as _write_json_durable,
 )
 from lib.service.tool_audit import AuditEvent, AuditLog
