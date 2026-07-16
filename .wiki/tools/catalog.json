@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "tool_id": "sample-events-db",
+      "type": "sqlite",
+      "connection": {
+        "path": "data/sample-events.sqlite3"
+      },
+      "allowed_tables": ["users", "registrations", "refunds"],
+      "limits": {
+        "max_rows": 10000,
+        "max_result_bytes": 10485760,
+        "max_cell_bytes": 65536,
+        "timeout_sec": 60
+      },
+      "allowed_statements": ["select"],
+      "delivery": {
+        "allowed_dirs": ["outputs/deliveries"]
+      }
+    }
+  ]
+}

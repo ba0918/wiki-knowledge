@@ -2,3 +2,7 @@ outputs/querylog.jsonl
 outputs/inventory.json
 outputs/graph.json
 .cache/
+.local/
+outputs/toolquery-audit.jsonl
+outputs/toolquery-plans/
+outputs/deliveries/
