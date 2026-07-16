@@ -898,6 +898,51 @@ class TestDoctorCli:
         rows = payload["diagnoses"][0]["checks"]
         assert any(r["check"] == "session_readonly" and r["status"] == "ok" for r in rows)
         assert "skip_summary" in payload
+        assert payload["required_skips"] == []
+
+    def test_required_skip_is_visible_without_changing_success_exit(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from lib.service.test_tool_doctor import mysql_tool
+        from lib.service.tool_connector_mysql import FakeMySqlDriver
+        from lib.service.tool_connector_registry import default_registry
+        from lib.service.clock import SystemClock
+        from lib.service.file_lock import RealFileLock
+
+        wiki_root = make_doctor_wiki(tmp_path, [mysql_tool()])
+        driver = FakeMySqlDriver(
+            script={
+                "SELECT @@session.transaction_read_only": (("ro",), [(1,)]),
+                "SHOW GRANTS FOR CURRENT_USER()": (
+                    ("Grants",),
+                    [("GRANT `app_writer`@`%` TO `readonly`@`%`",)],
+                ),
+            }
+        )
+        monkeypatch.setattr(
+            tool_query_run,
+            "_build_doctor",
+            lambda root: Doctor(
+                wiki_root=Path(root),
+                clock=SystemClock(),
+                lock=RealFileLock(),
+                registry=default_registry(mysql_driver=driver),
+            ),
+        )
+        code = tool_query_run.main(["doctor", "--wiki-root", str(wiki_root)])
+        output = capsys.readouterr().out
+        assert code == 0
+        assert "NG なし（必須 check の SKIP 1 件あり" in output
+
+        code = tool_query_run.main(
+            ["doctor", "--wiki-root", str(wiki_root), "--format", "json"]
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["required_skips"] == ["mysql-db:role_grants"]
 
     def test_unknown_tool_is_usage_error(
         self,

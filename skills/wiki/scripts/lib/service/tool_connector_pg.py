@@ -7,7 +7,8 @@ read-write transaction を開始し、その同じ transaction 内で named curs
 実行される」順序を許すため、契約は**接続直後・transaction 未開始の時点で
 ``Connection.read_only = True`` を設定し、その後に開始される明示 transaction
 内で named cursor を開く**に一本化する。``statement_timeout`` は接続オプション
-（``-c statement_timeout=..``）で渡す。
+（``-c statement_timeout=..``）で渡し、``search_path`` も静的 SQL gate が
+未修飾 relation を解決する ``default_schema`` に固定する。
 
 named cursor（server-side cursor）が必須契約: デフォルト cursor は結果全体を
 client にバッファするため、行数上限まで fetch した時点で打ち切る防御が
@@ -219,6 +220,29 @@ class PostgresConnector:
             )
         )
 
+    def execute_probe(self, sql: str) -> Ok[None] | Err[ToolConnectorError]:
+        if self._monotonic() >= self._deadline:
+            return Err(
+                error=ToolConnectorError.DEADLINE_EXCEEDED,
+                detail="deadline を超過しているため実行しません",
+            )
+        cursor = None
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute(sql)
+        except self._error_class as exc:
+            return Err(
+                error=_classify(exc, default=ToolConnectorError.EXECUTION_FAILED),
+                detail=_sanitized_detail(exc),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except self._error_class:
+                    pass
+        return Ok(value=None)
+
     def close(self) -> None:
         if not self._closed:
             self._closed = True
@@ -272,7 +296,10 @@ def open_postgres_connector(
         "password": password,
         "sslmode": "prefer" if config.allow_insecure_tls else "verify-full",
         "connect_timeout": max(1, math.ceil(remaining)),
-        "options": f"-c statement_timeout={math.ceil(remaining * 1000)}",
+        "options": (
+            f"-c statement_timeout={math.ceil(remaining * 1000)}"
+            f" -c search_path={config.default_schema}"
+        ),
         # statement_timeout は server 側の実行時間だけを縛る。ネットワーク停止
         # （TCP 応答なし）で fetch がハングする経路を tcp_user_timeout で縛る
         # （送信データが未 ACK のまま許容される最大 ms）
@@ -342,6 +369,11 @@ class _FakePgCursor:
         self._conn._begin_if_needed()
         self._conn.events.append(("execute", self.name, sql))
         driver = self._conn.driver
+        statement = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        if self.name is not None and statement not in {"SELECT", "VALUES"}:
+            raise FakePgError(
+                "named cursor query must be SELECT or VALUES", sqlstate="42601"
+            )
         if driver.execute_error is not None:
             raise driver.execute_error
         columns, rows = driver.result_for(sql)

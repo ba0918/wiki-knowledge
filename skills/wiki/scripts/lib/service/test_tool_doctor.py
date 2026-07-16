@@ -140,14 +140,19 @@ def pg_healthy_script() -> dict:
     script = {
         "SELECT current_setting('transaction_read_only')": (("current_setting",), [("on",)]),
     }
-    # role_grants: allowlist relation ごとの has_table_privilege（全 write 権限が false）
+    # role_grants: allowlist relation ごとの table/column write 権限が全て false
     for rel in ("public.users",):
         script[
             f"SELECT has_table_privilege(current_user, '{rel}', 'INSERT'),"
             f" has_table_privilege(current_user, '{rel}', 'UPDATE'),"
             f" has_table_privilege(current_user, '{rel}', 'DELETE'),"
-            f" has_table_privilege(current_user, '{rel}', 'TRUNCATE')"
-        ] = (("insert", "update", "delete", "truncate"), [(False, False, False, False)])
+            f" has_table_privilege(current_user, '{rel}', 'TRUNCATE'),"
+            f" has_any_column_privilege(current_user, '{rel}', 'INSERT'),"
+            f" has_any_column_privilege(current_user, '{rel}', 'UPDATE')"
+        ] = (
+            ("insert", "update", "delete", "truncate", "column_insert", "column_update"),
+            [(False, False, False, False, False, False)],
+        )
     return script
 
 
@@ -229,12 +234,41 @@ class TestPostgresChecks:
         for key in list(script):
             if key.startswith("SELECT has_table_privilege"):
                 script[key] = (
-                    ("insert", "update", "delete", "truncate"),
-                    [(False, True, False, False)],
+                    ("insert", "update", "delete", "truncate", "column_insert", "column_update"),
+                    [(False, True, False, False, False, False)],
                 )
         driver = FakePgDriver(script=script)
         report = run_doctor(wiki_root, registry=default_registry(pg_driver=driver))
         assert status_of(report, "pg-db", "role_grants") == CheckStatus.NG
+
+    def test_column_write_grant_is_ng(self, tmp_path: Path) -> None:
+        wiki_root = make_wiki(tmp_path, [pg_tool()])
+        script = pg_healthy_script()
+        for key in list(script):
+            if key.startswith("SELECT has_table_privilege"):
+                script[key] = (
+                    ("insert", "update", "delete", "truncate", "column_insert", "column_update"),
+                    [(False, False, False, False, True, False)],
+                )
+        report = run_doctor(
+            wiki_root,
+            registry=default_registry(pg_driver=FakePgDriver(script=script)),
+        )
+        assert status_of(report, "pg-db", "role_grants") == CheckStatus.NG
+
+    def test_missing_relation_hint_names_allowlisted_relation(self, tmp_path: Path) -> None:
+        from lib.service.tool_connector_pg import FakePgError
+
+        wiki_root = make_wiki(tmp_path, [pg_tool()])
+        driver = FakePgDriver(
+            script=pg_healthy_script(),
+            execute_error=FakePgError("relation missing", sqlstate="42P01"),
+        )
+        report = run_doctor(wiki_root, registry=default_registry(pg_driver=driver))
+        outcome = next(o for o in _outcomes(report, "pg-db") if o.check == "role_grants")
+        assert outcome.status == CheckStatus.NG
+        assert "public.users" in outcome.hint
+        assert "allowed_tables" in outcome.hint
 
     def test_role_write_denial_is_skip_by_default(self, tmp_path: Path) -> None:
         wiki_root = make_wiki(tmp_path, [pg_tool()])
@@ -462,6 +496,22 @@ class TestWriteProbe:
         # 拒否されれば write_probe は OK（role が書込を防いでいる）
         assert status_of(report, "pg-db", "write_probe") == CheckStatus.OK
 
+    def test_requested_probe_is_reported_when_initial_connection_fails(
+        self, tmp_path: Path
+    ) -> None:
+        from lib.service.tool_connector_pg import FakePgError
+
+        wiki_root = make_wiki(tmp_path, [pg_tool(canary_relation="doctor_canary")])
+        driver = FakePgDriver(connect_error=FakePgError("down", sqlstate="08006"))
+        report = run_doctor(
+            wiki_root,
+            registry=default_registry(pg_driver=driver),
+            probe_write="pg-db",
+        )
+        outcome = next(o for o in _outcomes(report, "pg-db") if o.check == "write_probe")
+        assert outcome.status == CheckStatus.SKIP
+        assert outcome.reason_code == "connect_failed"
+
     def test_probe_write_only_targets_named_tool(self, tmp_path: Path) -> None:
         wiki_root = make_wiki(
             tmp_path, [pg_tool(canary_relation="doctor_canary"), mysql_tool()]
@@ -558,6 +608,19 @@ class TestReportContract:
         summary = report.skip_summary()
         assert sum(summary.values()) >= 2  # role_write_denial + uninspected 等
 
+    def test_required_skips_lists_unverified_required_checks(self, tmp_path: Path) -> None:
+        wiki_root = make_wiki(tmp_path, [mysql_tool()])
+        script = mysql_healthy_script()
+        script["SHOW GRANTS FOR CURRENT_USER()"] = (
+            ("Grants",),
+            [("GRANT `app_writer`@`%` TO `readonly`@`%`",)],
+        )
+        report = run_doctor(
+            wiki_root,
+            registry=default_registry(mysql_driver=FakeMySqlDriver(script=script)),
+        )
+        assert report.required_skips() == ["mysql-db:role_grants"]
+
     def test_every_ng_has_a_hint(self, tmp_path: Path) -> None:
         wiki_root = make_wiki(tmp_path, [pg_tool()])
         script = pg_healthy_script()
@@ -630,6 +693,11 @@ class TestSqliteChecks:
         report = run_doctor(wiki_root)
         assert status_of(report, "events-db", "connectivity") == CheckStatus.OK
         assert status_of(report, "events-db", "delivery_writable") == CheckStatus.OK
+        credential = next(
+            o for o in _outcomes(report, "events-db") if o.check == "credential_resolves"
+        )
+        assert credential.status == CheckStatus.SKIP
+        assert credential.reason_code == "not_declared"
         # sqlite は authorizer が read-only を保証 — role introspection は持たない
         assert "role_grants" not in checks_of(report, "events-db")
 
@@ -678,3 +746,15 @@ class TestCheckRegistry:
                 if c.required and diag.type in c.applies
             }
             assert required <= emitted, (diag.type, required - emitted)
+
+    def test_checks_are_only_emitted_for_declared_types(self, tmp_path: Path) -> None:
+        wiki_root = make_wiki(tmp_path, [])
+        tool = sqlite_tool(tmp_path, wiki_root)
+        (wiki_root / "tools" / "catalog.json").write_text(
+            json.dumps({"schema_version": 1, "tools": [tool]}), encoding="utf-8"
+        )
+        report = run_doctor(wiki_root)
+        registry = {check.name: check for check in CHECK_REGISTRY}
+        for diagnosis in report.diagnoses:
+            for outcome in diagnosis.outcomes:
+                assert diagnosis.type in registry[outcome.check].applies

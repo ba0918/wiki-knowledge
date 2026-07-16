@@ -130,7 +130,7 @@ def _parse_count_sql(raw: str) -> CountSql:
     label, sep, path = raw.partition("=")
     if not sep or not label or not path:
         raise argparse.ArgumentTypeError(
-            f"--count-sql は <label>=<path> 形式が必要: {raw!r}"
+            f"<label>=<path> 形式が必要: {raw!r}"
         )
     return CountSql(label=label, path=Path(path))
 
@@ -420,6 +420,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
                         for d in report.diagnoses
                     ],
                     "skip_summary": report.skip_summary(),
+                    "required_skips": report.required_skips(),
                     "ok": not report.has_ng(),
                 },
                 ensure_ascii=False,
@@ -453,7 +454,17 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         skips = report.skip_summary()
         skip_total = sum(skips.values())
         print(f"SKIP: {skip_total} 件" + (f" ({skips})" if skips else ""))
-        print("判定: " + ("NG あり" if report.has_ng() else "必須 check 全 OK"))
+        required_skips = report.required_skips()
+        if report.has_ng():
+            verdict = "NG あり"
+        elif required_skips:
+            verdict = (
+                f"NG なし（必須 check の SKIP {len(required_skips)} 件あり"
+                " — 未検証項目を確認）"
+            )
+        else:
+            verdict = "必須 check 全 OK"
+        print("判定: " + verdict)
 
     return 1 if report.has_ng() else 0
 
@@ -555,10 +566,13 @@ def main(argv: list[str] | None = None) -> int:
         return args.handler(args)
     except KeyboardInterrupt:
         # staging cleanup は runner の finally が実施済み。状態を告知して 130
-        print(
-            "中断しました（staging は削除済み。plan の状態は state.json を参照）",
-            file=sys.stderr,
-        )
+        if args.subcommand in ("prepare", "execute"):
+            print(
+                "中断しました（staging は削除済み。plan の状態は state.json を参照）",
+                file=sys.stderr,
+            )
+        else:
+            print("中断しました", file=sys.stderr)
         return 130
     except OSError as exc:
         # 未捕捉の I/O 失敗（durable 書込み等）でも exit code 契約（0/1/2/130）を守る

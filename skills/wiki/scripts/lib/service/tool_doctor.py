@@ -77,7 +77,9 @@ class DoctorCheck:
 # test_tool_doctor.py::TestCheckRegistry が emit との同期を機械検証する。
 _SQL_TYPES = ("postgres", "mysql")
 CHECK_REGISTRY: tuple[DoctorCheck, ...] = (
-    DoctorCheck("credential_resolves", ("postgres", "mysql", "http"), required=True),
+    DoctorCheck(
+        "credential_resolves", ("sqlite", "postgres", "mysql", "http"), required=True
+    ),
     DoctorCheck("connectivity", ("sqlite", "postgres", "mysql"), required=True),
     DoctorCheck("tls", _SQL_TYPES, required=True),
     DoctorCheck("session_readonly", _SQL_TYPES, required=True),
@@ -125,6 +127,21 @@ class DoctorReport:
                 if o.status == CheckStatus.SKIP:
                     counts[o.reason_code] = counts.get(o.reason_code, 0) + 1
         return counts
+
+    def required_skips(self) -> list[str]:
+        required = {
+            (check.name, connector_type)
+            for check in CHECK_REGISTRY
+            if check.required
+            for connector_type in check.applies
+        }
+        return [
+            f"{diagnosis.tool_id}:{outcome.check}"
+            for diagnosis in self.diagnoses
+            for outcome in diagnosis.outcomes
+            if outcome.status == CheckStatus.SKIP
+            and (outcome.check, diagnosis.type) in required
+        ]
 
 
 class DoctorError(str, Enum):
@@ -310,6 +327,14 @@ class Doctor:
         cred = self._check_credential(entry)
         if cred is not None:
             outcomes.append(cred)
+        else:
+            outcomes.append(
+                _skip(
+                    "credential_resolves",
+                    "not_declared",
+                    "sqlite は credential_ref 未宣言で利用できます",
+                )
+            )
         provider = self._registry.resolve(entry.type).value
         opened = provider.open(
             entry=entry,
@@ -404,6 +429,14 @@ class Doctor:
             outcomes.append(self._skip_role_write_denial())
             outcomes.append(self._skip_role_uninspected())
             outcomes.append(self._check_delivery(entry))
+            if probe_write == entry.tool_id:
+                outcomes.append(
+                    _skip(
+                        "write_probe",
+                        "connect_failed",
+                        "初期接続不能のため probe を実行していません",
+                    )
+                )
             return outcomes
 
         connector = opened.value
@@ -515,14 +548,26 @@ class Doctor:
                 f"SELECT has_table_privilege(current_user, '{rel}', 'INSERT'),"
                 f" has_table_privilege(current_user, '{rel}', 'UPDATE'),"
                 f" has_table_privilege(current_user, '{rel}', 'DELETE'),"
-                f" has_table_privilege(current_user, '{rel}', 'TRUNCATE')"
+                f" has_table_privilege(current_user, '{rel}', 'TRUNCATE'),"
+                f" has_any_column_privilege(current_user, '{rel}', 'INSERT'),"
+                f" has_any_column_privilege(current_user, '{rel}', 'UPDATE')"
             )
             row = self._introspect_row(connector, sql)
             if is_err(row):
+                if "sqlstate=42P01" in row.detail:
+                    hint = (
+                        f"relation {rel} が存在しない可能性があります"
+                        "（allowed_tables を確認）"
+                    )
+                else:
+                    hint = (
+                        "権限を取得できません（has_table_privilege / "
+                        "has_any_column_privilege の実行可否を確認）"
+                    )
                 return _ng(
                     "role_grants",
                     "introspection_failed",
-                    "権限を取得できません（has_table_privilege の実行可否を確認）",
+                    hint,
                 )
             if any(bool(v) for v in row.value):
                 return _ng(
@@ -577,6 +622,11 @@ class Doctor:
         return _ok("role_grants")
 
     def _write_probe(self, entry: ToolEntry, announce) -> CheckOutcome:
+        """canary INSERT が拒否されることを確認する。
+
+        MySQL の canary は InnoDB 等のトランザクショナルエンジンが必須。
+        非トランザクショナルエンジンでは close 時の rollback でも書込が残り得る。
+        """
         canary = getattr(entry.connection, "canary_relation", None)
         if not canary:
             return _ng(
@@ -617,18 +667,23 @@ class Doctor:
             )
 
         try:
-            result = connector.execute_stream(sql)
+            result = (
+                connector.execute_probe(sql)
+                if entry.type == "postgres"
+                else connector.execute_stream(sql)
+            )
             if is_err(result):
                 if result.error == ToolConnectorError.NOT_AUTHORIZED:
                     return _denied()
                 return _inconclusive(result.error)
-            try:
-                with result.value as stream:
-                    list(stream)
-            except ConnectorStreamError as exc:
-                if exc.reason == ToolConnectorError.NOT_AUTHORIZED:
-                    return _denied()
-                return _inconclusive(exc.reason)
+            if entry.type == "mysql":
+                try:
+                    with result.value as stream:
+                        list(stream)
+                except ConnectorStreamError as exc:
+                    if exc.reason == ToolConnectorError.NOT_AUTHORIZED:
+                        return _denied()
+                    return _inconclusive(exc.reason)
             # 拒否されず成功してしまった → role が書込可能（rollback で取消）
             return _ng(
                 "write_probe",

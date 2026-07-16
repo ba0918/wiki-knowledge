@@ -87,7 +87,12 @@ class TestConnectKwargs:
         open_ok(driver, now=0.0, deadline=30.0)
         kw = driver.connect_kwargs
         assert 1 <= kw["connect_timeout"] <= 30
-        assert kw["options"] == "-c statement_timeout=30000"
+        assert kw["options"] == "-c statement_timeout=30000 -c search_path=public"
+
+    def test_unqualified_relations_resolve_in_declared_schema(self) -> None:
+        driver = FakePgDriver()
+        open_ok(driver, config=make_config(default_schema="analytics"))
+        assert "-c search_path=analytics" in driver.connect_kwargs["options"]
 
     def test_user_supplied_dsn_string_is_not_accepted(self) -> None:
         """接続は field からの keyword 引数組み立てのみ — conninfo 文字列を渡す
@@ -121,6 +126,20 @@ class TestReadOnlyOrdering:
         names = [e[1] for e in conn.events if e[0] == "cursor"]
         assert len(names) == 1
         assert names[0]  # 無名（client-side buffered）cursor ではない
+
+    def test_write_probe_uses_client_side_cursor(self) -> None:
+        driver = FakePgDriver(
+            execute_error=FakePgError("permission denied", sqlstate="42501")
+        )
+        connector = open_ok(driver)
+        result = connector.execute_probe(
+            "INSERT INTO doctor_canary (doctor_probe) VALUES (1)"
+        )
+        assert is_err(result)
+        assert result.error == ToolConnectorError.NOT_AUTHORIZED
+        assert [e[1] for e in driver.connections[0].events if e[0] == "cursor"] == [
+            None
+        ]
 
     def test_repeated_streams_use_unique_cursor_names(self) -> None:
         driver = FakePgDriver(columns=("id",), rows=[(1,)])

@@ -106,7 +106,8 @@ GRANT SELECT ON billing.invoices TO 'wiki_readonly'@'%';
 
 - **postgres**: 接続直後・transaction 未開始の時点で `Connection.read_only = True` を設定し、
   その後に開始される明示 transaction 内で named cursor（server-side cursor）を開く。
-  `statement_timeout` は接続オプションで渡す
+  `statement_timeout` と `search_path=<default_schema>` は接続オプションで渡し、静的 SQL gate と
+  実行時の未修飾 relation の解決先を一致させる
 - **mysql**: autocommit 状態（transaction 開始前）で `SET SESSION TRANSACTION READ ONLY` +
   `max_execution_time` を発行し、その後 `START TRANSACTION` → `SSCursor`（unbuffered）で実行
 - 巨大結果は server-side cursor で行数上限まで fetch した時点で打ち切る（client 全バッファしない）
@@ -193,16 +194,19 @@ python3 skills/wiki/scripts/tool_query_run.py doctor --wiki-root .wiki [--tool <
 - 出力は固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`（`--format table|json`）
 - **read-only は独立 check に分解**される（同一接続では session と role を区別できないため）:
   - `session_readonly` — 実クエリと同じ transaction 内の read-only 状態を introspection
-  - `role_grants` — pg: allowlist relation 全件で INSERT/UPDATE/DELETE/TRUNCATE が false /
+  - `role_grants` — pg: allowlist relation 全件で table-level INSERT/UPDATE/DELETE/TRUNCATE と
+    column-level INSERT/UPDATE が false /
     mysql: `SHOW GRANTS` を parse し SELECT 以外の権限がないこと。**role 付与（MySQL 8 roles）や
     解析できない grant 行がある場合は `role_grants_incomplete` の SKIP**（fail-open せず、
     実効権限は `SHOW GRANTS ... USING` で確認が必要な旨を示す）
   - `role_write_denial` — 通常実行では機械検証しない（**SKIP** 既定）
   - `role_uninspected_privileges` — CREATE / TEMPORARY / EXECUTE 等は機械検証対象外（**SKIP** 明示）
 - その他: `credential_resolves` / `tls` / `connectivity` / http は `http_allowlist`（dry-run、実送信しない）/
-  `delivery_writable`（temp probe → 即削除）
-- **exit code**: 0 = 必須 check 全 OK（SKIP は失敗扱いにしない） / 1 = NG あり / 2 = usage / 130 = 中断。
-  summary に SKIP 件数を必ず含める（SKIP を無言で流さない）
+  `delivery_writable`（temp probe → 即削除）/ `audit`（doctor イベントの監査ログ書込可否。
+  書込失敗は `audit_write_failed` の NG として計上し、exit 0 で無言に流さない）
+- **exit code**: 0 = NG なし（SKIP は失敗扱いにしない） / 1 = NG あり / 2 = usage / 130 = 中断。
+  summary に SKIP 件数を必ず含め、必須 check に SKIP があれば未検証件数を明示する。
+  JSON は対象 check 名を `required_skips` に列挙する
 - **`--probe-write <tool-id>`（二重 opt-in）**: `connection.canary_relation` を宣言した tool に対してのみ、
   canary への INSERT を試行し「拒否されること」を確認する。canary 未宣言なら probe 自体を拒否。
   対象が未知 tool / postgres・mysql 以外 / `--tool` と不一致の場合は usage エラー（exit 2）。
@@ -210,7 +214,8 @@ python3 skills/wiki/scripts/tool_query_run.py doctor --wiki-root .wiki [--tool <
   「その他の失敗」は `probe_inconclusive` の NG（あらゆる失敗を書込拒否成功と誤認しない）。
   本 connector は read-only session 専用のため、この probe は session read-only + role の**重畳**での
   拒否を確認する（role 単独の書込拒否を session から分離しては検証しない — role 側の第一情報源は
-  `role_grants`）
+  `role_grants`）。MySQL の canary relation はトランザクショナルエンジン（InnoDB）必須であり、
+  非トランザクショナルエンジンでは rollback しても probe の書込が残り得る
 - **TLS check**: 接続成立をもって「verify-full / CA+hostname 検証つきの TLS ネゴシエーション成立」を
   OK とする（緩和宣言時は SKIP、接続不能時も SKIP — 設定値だけで OK にしない）
 

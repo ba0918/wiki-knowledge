@@ -149,7 +149,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py doctor \
   --wiki-root {wiki_root} [--tool <id>] [--probe-write <tool-id>] --format table
 ```
 
-- 固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`。exit 0 = 必須 OK / 1 = NG / 2 = usage
+- 固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`。exit 0 = 必須 OK / 1 = NG / 2 = usage / 130 = 中断
 - read-only は独立 check（`session_readonly` / `role_grants`）に分解。`role_write_denial` と
   機械検証外の権限（CREATE / TEMPORARY / EXECUTE）は **SKIP** を明示（無言で流さない）
 - doctor は結果データに触れない（COUNT すら実行しない）。監査は plan 非依存の `doctor` イベント
