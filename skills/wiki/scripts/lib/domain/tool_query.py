@@ -365,6 +365,69 @@ def is_expired(*, now: str, expires_at: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 遷移表駆動の汎用状態機械（connector 非依存）
+# ---------------------------------------------------------------------------
+#
+# 既存の approve_transition / consume_transition は draft→approved→consumed に
+# 特殊化された関数（attestation / run_id の記録という副作用を持つ）。汎用
+# transition は「その status からその status へ遷移してよいか」だけを表駆動で
+# 判定する純関数で、browser 側の seal-at-prepare 状態機械
+# （prepared→approved→delivering→delivered/failed/expired）もこの上に載る。
+
+
+class TransitionError(str, Enum):
+    NOT_ALLOWED = "transition_not_allowed"
+
+
+@dataclass(frozen=True)
+class TransitionTable:
+    """status 集合と許可遷移の宣言（frozen・値等価）。
+
+    * ``initial`` — publish 直後の status
+    * ``edges`` — ``{current: (許可される次 status, ...)}``
+    * ``terminal`` — それ以上遷移できない終端 status 集合
+    """
+
+    initial: str
+    edges: dict[str, tuple[str, ...]]
+    terminal: frozenset[str]
+
+    def statuses(self) -> frozenset[str]:
+        acc: set[str] = {self.initial}
+        acc |= set(self.edges.keys())
+        acc |= set(self.terminal)
+        for targets in self.edges.values():
+            acc |= set(targets)
+        return frozenset(acc)
+
+
+def apply_transition(
+    table: TransitionTable, *, current: str, target: str
+) -> Ok[str] | Err[TransitionError]:
+    """``current`` から ``target`` への遷移が表で許可されているか判定する。
+
+    未知 status・終端からの遷移・宣言されていない edge はすべて
+    :attr:`TransitionError.NOT_ALLOWED`（fail closed）。
+    """
+
+    if target not in table.edges.get(current, ()):
+        return Err(
+            error=TransitionError.NOT_ALLOWED,
+            detail=f"{current!r} -> {target!r} は許可されていない",
+        )
+    return Ok(value=target)
+
+
+# draft→approved→consumed の SQL 系遷移表。既存 approve/consume_transition が
+# 実装している遷移の許可集合と一致する（test_transition.py が同値性を固定）。
+SQL_TRANSITION_TABLE = TransitionTable(
+    initial="draft",
+    edges={"draft": ("approved",), "approved": ("consumed",)},
+    terminal=frozenset({"consumed"}),
+)
+
+
 def _reject_for_status(status: PlanStatus) -> RejectReason:
     if status == "draft":
         return RejectReason.NOT_APPROVED

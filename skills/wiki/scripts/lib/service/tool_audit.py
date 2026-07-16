@@ -101,17 +101,56 @@ class AuditError(str, Enum):
 
 
 @dataclass(frozen=True)
+class AuditRegistry:
+    """監査の許可 enum レジストリ + 出力パス（注入面）.
+
+    共有 :class:`AuditLog` を connector 非依存に一般化するための注入面。
+    「値を含まないメタデータのみ」の不変条件は registry を跨いで同一で、
+    registry は**何が許可されるか**（events / subcommands / reasons /
+    digest フィールド名 / 出力パス）だけを差し替える。
+
+    * ``events`` — ``{event名: plan_dependent}``。plan_dependent=True は
+      plan_id 必須、False は plan_id 禁止（診断イベント: SQL の doctor /
+      browser の login）
+    * ``allowed_digest_keys`` — 汎用 ``digests`` マップに載せてよいキー名集合
+      （browser: ``artifact_digest`` / ``manifest_digest``）。SQL は専用
+      ``sql_digest`` フィールドを使うため空集合
+    """
+
+    events: dict[str, bool]
+    subcommands: frozenset[str]
+    allowed_reasons: frozenset[str]
+    allowed_digest_keys: frozenset[str]
+    relative_path: str
+
+
+# SQL 系（wiki-tool-query）の既定レジストリ。registry を渡さない既存呼び出しは
+# これを使う（振る舞い不変）。module 定数 AUDIT_EVENTS / AUDIT_SUBCOMMANDS /
+# ALLOWED_REASONS / PLAN_INDEPENDENT_EVENTS が真実源。
+SQL_AUDIT_REGISTRY = AuditRegistry(
+    events={e: (e not in PLAN_INDEPENDENT_EVENTS) for e in AUDIT_EVENTS},
+    subcommands=frozenset(AUDIT_SUBCOMMANDS),
+    allowed_reasons=ALLOWED_REASONS,
+    allowed_digest_keys=frozenset(),  # SQL は専用 sql_digest フィールドを使う
+    relative_path=AUDIT_RELATIVE_PATH,
+)
+
+
+@dataclass(frozen=True)
 class AuditEvent:
     """1 イベント分のメタデータ。値（結果行・条件値）を持つフィールドはない。"""
 
     event: str
-    plan_id: str | None  # doctor（plan 非依存）のみ None
+    plan_id: str | None  # plan 非依存イベント（doctor / login）のみ None
     tool_id: str
     subcommand: str
-    sql_digest: str | None = None
+    sql_digest: str | None = None  # SQL 系専用（SHA256 hex）
     row_count: int | None = None
     delivery_dir: str | None = None  # catalog 相対表記のみ（絶対パス・traversal 拒否）
-    reason: str | None = None  # ALLOWED_REASONS の列挙値のみ
+    reason: str | None = None  # registry.allowed_reasons の列挙値のみ
+    # 汎用 digest（browser: artifact_digest / manifest_digest 等）。キーは
+    # registry.allowed_digest_keys に含まれ、値は SHA256 hex のみ。
+    digests: dict[str, str] | None = None
 
 
 def _is_relative_clean_dir(value: str) -> bool:
@@ -126,22 +165,31 @@ def _is_relative_clean_dir(value: str) -> bool:
     return all(part not in ("", ".", "..") for part in parts)
 
 
-def _validate_event(event: AuditEvent) -> str | None:
+def _validate_event(event: AuditEvent, registry: AuditRegistry) -> str | None:
     """禁止情報の混入を API 側で防ぐ形式検証。違反メッセージ（str）か None。"""
 
-    if event.event not in AUDIT_EVENTS:
+    if event.event not in registry.events:
         return f"未知のイベント: {event.event!r}"
-    if event.event in PLAN_INDEPENDENT_EVENTS:
+    plan_dependent = registry.events[event.event]
+    if not plan_dependent:
         if event.plan_id is not None:
-            return "診断イベント（doctor）に plan_id は載せない"
+            return "診断イベント（plan 非依存）に plan_id は載せない"
     elif event.plan_id is None or is_err(parse_plan_id(event.plan_id)):
         return "plan_id が生成形式ではない"
     if not isinstance(event.tool_id, str) or not _ID_RE.fullmatch(event.tool_id):
         return "tool_id が slug 形式ではない"
-    if event.subcommand not in AUDIT_SUBCOMMANDS:
+    if event.subcommand not in registry.subcommands:
         return f"未知の subcommand: {event.subcommand!r}"
     if event.sql_digest is not None and not is_sha256_hex(event.sql_digest):
         return "sql_digest が SHA256 hex ではない"
+    if event.digests is not None:
+        if not isinstance(event.digests, dict):
+            return "digests はオブジェクトが必要"
+        for key, value in event.digests.items():
+            if key not in registry.allowed_digest_keys:
+                return f"未知の digest キー: {key!r}"
+            if not is_sha256_hex(value):
+                return f"digest 値が SHA256 hex ではない: {key!r}"
     if event.row_count is not None and (
         type(event.row_count) is not int or event.row_count < 0
     ):
@@ -150,7 +198,7 @@ def _validate_event(event: AuditEvent) -> str | None:
         event.delivery_dir
     ):
         return "delivery_dir は catalog 相対表記のみ（絶対パス・traversal 禁止）"
-    if event.reason is not None and event.reason not in ALLOWED_REASONS:
+    if event.reason is not None and event.reason not in registry.allowed_reasons:
         return f"reason は既知の reason code のみ: {event.reason!r}"
     return None
 
@@ -177,15 +225,17 @@ class AuditLog:
         lock: FileLock,
         clock: Clock,
         lock_timeout: float,
+        registry: AuditRegistry = SQL_AUDIT_REGISTRY,
     ) -> None:
         self._wiki_root = Path(wiki_root)
-        self._path = self._wiki_root / AUDIT_RELATIVE_PATH
+        self._registry = registry
+        self._path = self._wiki_root / registry.relative_path
         self._lock = lock
         self._clock = clock
         self._lock_timeout = lock_timeout
 
     def append(self, event: AuditEvent) -> Ok[None] | Err[AuditError]:
-        violation = _validate_event(event)
+        violation = _validate_event(event, self._registry)
         if violation is not None:
             return Err(error=AuditError.INVALID_EVENT, detail=violation)
 
@@ -208,6 +258,11 @@ class AuditLog:
                 value = getattr(event, field)
                 if value is not None:
                     entry[field] = value
+            # 汎用 digest（browser: artifact_digest / manifest_digest）を
+            # トップレベルの独立キーとして展開する（値は検証済み SHA256 hex）
+            if event.digests:
+                for key in sorted(event.digests):
+                    entry[key] = event.digests[key]
             data = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
 
             self._path.parent.mkdir(parents=True, exist_ok=True)

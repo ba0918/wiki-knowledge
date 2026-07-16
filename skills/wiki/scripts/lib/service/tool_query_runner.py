@@ -48,7 +48,13 @@ from lib.domain.tool_query import (
 )
 from lib.domain.types import Err, Ok, is_err
 from lib.service.clock import Clock
-from lib.service.file_lock import FileLock, FileLockTimeout
+from lib.service.file_lock import FileLock
+from lib.service.tool_approval import (
+    ApprovalService,
+    fsync_dir as _fsync_dir,
+    write_bytes_durable as _write_bytes_durable,
+    write_json_durable as _write_json_durable,
+)
 from lib.service.tool_audit import AuditEvent, AuditLog
 from lib.service.tool_catalog import (
     Catalog,
@@ -76,11 +82,10 @@ from lib.service.tool_delivery import (
     encode_csv_row,
     publish_run_dir,
 )
-from lib.service.tool_paths import resolve_declared_dir, resolve_no_symlink_path
+from lib.service.tool_paths import resolve_declared_dir
 
 
 PLANS_RELATIVE_PATH = "outputs/toolquery-plans"
-STAGING_RETRY_LIMIT = 5
 
 
 class RunnerReason(str, Enum):
@@ -174,35 +179,9 @@ class ExecuteOutcome:
 
 
 # ---------------------------------------------------------------------------
-# durable write ヘルパー
+# durable write ヘルパー（真実源は tool_approval — ここは monkeypatch 互換の
+# module-level 別名。テストは tool_query_runner._write_json_durable を差し替える）
 # ---------------------------------------------------------------------------
-
-
-def _fsync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _write_bytes_durable(path: Path, data: bytes) -> None:
-    """temp 書き → fsync → os.replace → 親 dir fsync（crash-safe 更新）。"""
-
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-    _fsync_dir(path.parent)
-
-
-def _write_json_durable(path: Path, data: dict) -> None:
-    blob = (
-        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
-    _write_bytes_durable(path, blob)
 
 
 def _default_nonce() -> str:
@@ -248,6 +227,14 @@ class ToolQueryRunner:
             wiki_root=self._wiki_root,
             lock=lock,
             clock=clock,
+            lock_timeout=lock_timeout,
+        )
+        # 承認ライフサイクルの共有 core（prepare-publish / approve-CAS /
+        # consume-CAS の順序と lock 規律）。policy（bundle 内容・matrix・監査）は
+        # 各メソッドが callback で注入する。
+        self._approval = ApprovalService(
+            plans_root=self.plans_root,
+            lock=lock,
             lock_timeout=lock_timeout,
         )
 
@@ -301,16 +288,8 @@ class ToolQueryRunner:
         )
 
     def _resolve_bundle(self, plan_id: str) -> Ok[Path] | Err:
-        resolved = resolve_no_symlink_path(base=self.plans_root, relative=plan_id)
-        if is_err(resolved):
-            return Err(error=_reason_value(resolved.error), detail=resolved.detail)
-        bundle = resolved.value
-        if not bundle.is_dir():
-            return Err(
-                error=RejectReason.BUNDLE_MISSING.value,
-                detail=f"bundle が存在しません: {plan_id}",
-            )
-        return Ok(value=bundle)
+        # 共有 core に委譲（全 segment symlink 拒否 + BUNDLE_MISSING）
+        return self._approval.resolve_bundle(plan_id)
 
     def _read_bundle_proposal(
         self, bundle: Path
@@ -600,71 +579,48 @@ class ToolQueryRunner:
         sql_bytes: bytes,
         count_payloads: list[tuple[CountSql, bytes, str]],
     ) -> Ok[tuple[str, Path]] | Err:
-        plans_root = self.plans_root
-        plans_root.mkdir(parents=True, exist_ok=True)
+        # 共有 core の publish_bundle に委譲。plan_id を埋め込む proposal.json は
+        # 衝突リトライで確定した final plan_id で再構築する（build_files）。
+        created_at = proposal.created_at
+        tool_id = proposal.tool_id
+        count_bytes_list = [payload[1] for payload in count_payloads]
 
-        # staging の排他生成のみ os.mkdir。衝突時は nonce を替えて再試行
-        plan_id = proposal.plan_id
-        staging: Path | None = None
-        for _ in range(STAGING_RETRY_LIMIT):
-            candidate = plans_root / f".staging-{plan_id}"
-            try:
-                os.mkdir(candidate, mode=0o700)
-                staging = candidate
-                break
-            except FileExistsError:
-                plan_id = build_plan_id(
-                    now_iso=proposal.created_at,
-                    nonce=self._nonce(),
-                    tool_id=proposal.tool_id,
-                )
-        if staging is None:
-            return Err(
-                error=RunnerReason.PLAN_CONFLICT.value,
-                detail="staging directory の生成に失敗（衝突が続く）",
-            )
-        if plan_id != proposal.plan_id:
-            proposal = Proposal(
-                **{
-                    **proposal.__dict__,
-                    "plan_id": plan_id,
-                }
+        def rebuild_plan_id() -> str:
+            return build_plan_id(
+                now_iso=created_at, nonce=self._nonce(), tool_id=tool_id
             )
 
-        try:
-            _write_bytes_durable(
-                staging / "proposal.json", proposal_to_json_bytes(proposal)
+        def build_files(plan_id: str) -> dict[str, bytes]:
+            final_proposal = (
+                proposal
+                if plan_id == proposal.plan_id
+                else Proposal(**{**proposal.__dict__, "plan_id": plan_id})
             )
-            _write_bytes_durable(staging / "query.sql", sql_bytes)
-            counts_dir = staging / "counts"
-            counts_dir.mkdir(mode=0o700)
-            for i, (_, count_bytes, _) in enumerate(count_payloads):
-                _write_bytes_durable(counts_dir / f"{i:02d}.sql", count_bytes)
-            _write_json_durable(
-                staging / "state.json",
-                state_to_json_dict(PlanState(status="draft")),
-            )
-            _fsync_dir(staging)
-
-            with self._lock.acquire(
-                str(plans_root / ".plans.lock"), timeout=self._lock_timeout
-            ):
-                final = plans_root / plan_id
-                # 既存の空 directory との衝突も拒否（rename の黙った置換を防ぐ）
-                if os.path.lexists(final):
-                    return Err(
-                        error=RunnerReason.PLAN_CONFLICT.value,
-                        detail=f"plan {plan_id!r} が既に存在します",
+            files: dict[str, bytes] = {
+                "proposal.json": proposal_to_json_bytes(final_proposal),
+                "query.sql": sql_bytes,
+                "state.json": (
+                    json.dumps(
+                        state_to_json_dict(PlanState(status="draft")),
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
                     )
-                os.rename(staging, final)
-                staging = None  # publish 済み
-                _fsync_dir(plans_root)
-                return Ok(value=(plan_id, final))
-        except (OSError, FileLockTimeout) as exc:
-            return Err(error=RunnerReason.PLAN_CONFLICT.value, detail=str(exc))
-        finally:
-            if staging is not None:
-                cleanup_staging(staging)
+                    + "\n"
+                ).encode("utf-8"),
+            }
+            for i, count_bytes in enumerate(count_bytes_list):
+                files[f"counts/{i:02d}.sql"] = count_bytes
+            return files
+
+        result = self._approval.publish_bundle(
+            plan_id=proposal.plan_id,
+            rebuild_plan_id=rebuild_plan_id,
+            build_files=build_files,
+        )
+        if is_err(result):
+            return Err(error=result.error, detail=result.detail)
+        return Ok(value=(result.value.plan_id, result.value.bundle_dir))
 
     # -- approve -------------------------------------------------------------
 
@@ -724,63 +680,68 @@ class ToolQueryRunner:
             return bundle_result
         bundle = bundle_result.value
 
-        try:
-            with self._lock.acquire(
-                str(bundle) + ".lock", timeout=self._lock_timeout
-            ):
-                loaded = self._read_bundle_proposal(bundle)
-                if is_err(loaded):
-                    return loaded
-                proposal_bytes, proposal = loaded.value
-                digest_now = sha256_hex(proposal_bytes)
-                if digest_now != expected_proposal_digest:
-                    return Err(
-                        error=RejectReason.PROPOSAL_DIGEST_MISMATCH.value,
-                        detail="表示時と proposal.json の bytes が一致しません",
-                    )
-                if is_expired(now=self._clock.now(), expires_at=proposal.expires_at):
-                    return Err(
-                        error=RejectReason.TTL_EXPIRED.value,
-                        detail=proposal.expires_at,
-                    )
-                state = self._read_state(bundle)
-                if is_err(state):
-                    return state
-                transition = approve_transition(
-                    state.value,
-                    ApprovalAttestation(
-                        approved_by=name.value,
-                        approved_at=self._clock.now(),
-                        proposal_digest=digest_now,
-                    ),
+        holder: dict[str, object] = {}
+
+        def validate(b: Path) -> Ok[tuple] | Err:
+            loaded = self._read_bundle_proposal(b)
+            if is_err(loaded):
+                return loaded
+            proposal_bytes, proposal = loaded.value
+            digest_now = sha256_hex(proposal_bytes)
+            if digest_now != expected_proposal_digest:
+                return Err(
+                    error=RejectReason.PROPOSAL_DIGEST_MISMATCH.value,
+                    detail="表示時と proposal.json の bytes が一致しません",
                 )
-                if is_err(transition):
-                    return Err(
-                        error=_reason_value(transition.error),
-                        detail=transition.detail,
-                    )
-                new_state = transition.value
-                # audit-first（execute の attempted と同じ順序）: 監査が書けなければ
-                # 状態を変えない。監査成功後の書込みクラッシュは「監査に approved・
-                # state は draft」となり、再 approve で回復できる
-                audit = self._append_audit(
-                    "approved",
-                    plan_id=proposal.plan_id,
-                    tool_id=proposal.tool_id,
-                    subcommand="approve",
-                    sql_digest=proposal.sql_digest,
+            if is_expired(now=self._clock.now(), expires_at=proposal.expires_at):
+                return Err(
+                    error=RejectReason.TTL_EXPIRED.value, detail=proposal.expires_at
                 )
-                if is_err(audit):
-                    return Err(
-                        error=RunnerReason.AUDIT_WRITE_FAILED.value,
-                        detail=audit.detail,
-                    )
-                _write_json_durable(
-                    bundle / "state.json", state_to_json_dict(new_state)
+            state = self._read_state(b)
+            if is_err(state):
+                return state
+            holder["proposal"] = proposal
+            return Ok(value=(state.value, digest_now))
+
+        def do_approve(ctx: tuple) -> Ok[PlanState] | Err:
+            state, digest_now = ctx
+            transition = approve_transition(
+                state,
+                ApprovalAttestation(
+                    approved_by=name.value,
+                    approved_at=self._clock.now(),
+                    proposal_digest=digest_now,
+                ),
+            )
+            if is_err(transition):
+                return Err(
+                    error=_reason_value(transition.error), detail=transition.detail
                 )
-                return Ok(value=new_state)
-        except FileLockTimeout as exc:
-            return Err(error=RunnerReason.LOCK_TIMEOUT.value, detail=str(exc))
+            return transition
+
+        def audit_approved() -> Ok[None] | Err:
+            proposal = holder["proposal"]
+            return self._append_audit(
+                "approved",
+                plan_id=proposal.plan_id,
+                tool_id=proposal.tool_id,
+                subcommand="approve",
+                sql_digest=proposal.sql_digest,
+            )
+
+        def write_state(b: Path, new_state: PlanState) -> None:
+            _write_json_durable(b / "state.json", state_to_json_dict(new_state))
+
+        # audit-first（consume の attempted と同じ順序）は共有 core が保証する:
+        # approved 監査が書けなければ state を書かない。監査成功後の書込み
+        # クラッシュは「監査 approved・state draft」となり再 approve で回復できる
+        return self._approval.approve_cas(
+            bundle=bundle,
+            validate=validate,
+            do_approve=do_approve,
+            audit_approved=audit_approved,
+            write_state=write_state,
+        )
 
     # -- execute -------------------------------------------------------------
 
@@ -794,116 +755,137 @@ class ToolQueryRunner:
             return bundle_result
         bundle = bundle_result.value
 
-        # --- CAS 区間: bundle・catalog の読み込みと検証も plan lock 内で行う。
-        # lock 前に読むと、lock 内検証が古い bytes を対象にし、検証を通った
-        # 古い SQL がそのまま DB 実行へ渡る TOCTOU が生まれる ---
-        try:
-            with self._lock.acquire(
-                str(bundle) + ".lock", timeout=self._lock_timeout
-            ):
-                loaded = self._read_bundle_proposal(bundle)
-                if is_err(loaded):
-                    return loaded
-                proposal_bytes, proposal = loaded.value
-                try:
-                    sql_bytes = (bundle / "query.sql").read_bytes()
-                    counts_dir = bundle / "counts"
-                    count_digests = tuple(
-                        sha256_hex(path.read_bytes())
-                        for path in sorted(counts_dir.glob("*.sql"))
-                    )
-                except OSError as exc:
-                    return Err(
-                        error=RejectReason.BUNDLE_MISSING.value, detail=str(exc)
-                    )
+        # --- CAS 区間: bundle・catalog の読み込みと検証を plan lock 内で行う
+        # （共有 core の consume_cas が lock を連続保持）。lock 前に読むと、
+        # lock 内検証が古い bytes を対象にし、検証を通った古い SQL がそのまま
+        # DB 実行へ渡る TOCTOU が生まれる。validate は SQL policy（matrix /
+        # precheck / deadline）と拒否時 rejected 監査を所有する ---
+        holder: dict[str, object] = {}
 
-                entry_loaded = self._load_entry(proposal.tool_id)
-                if is_err(entry_loaded):
-                    return entry_loaded
-                catalog, entry = entry_loaded.value
-                provider_result = self._resolve_provider(entry)
-                if is_err(provider_result):
-                    return provider_result
-                provider = provider_result.value
-                limits = entry.limits
-                deadline = started + limits.timeout_sec
-
-                def _audit_exec(event: str, *, reason: str | None = None, **kw):
-                    return self._append_audit(
-                        event,
-                        plan_id=proposal.plan_id,
-                        tool_id=proposal.tool_id,
-                        subcommand="execute",
-                        sql_digest=proposal.sql_digest,
-                        reason=reason,
-                        **kw,
-                    )
-
-                state_result = self._read_state(bundle)
-                if is_err(state_result):
-                    _audit_exec("rejected", reason=_reason_value(state_result.error))
-                    return state_result
-                state = state_result.value
-
-                matrix = evaluate_execute_matrix(
-                    state=state,
-                    proposal=proposal,
-                    proposal_digest_now=sha256_hex(proposal_bytes),
-                    sql_digest_now=sha256_hex(sql_bytes),
-                    count_sql_digests_now=count_digests,
-                    catalog_digest_now=catalog.digest,
-                    now=self._clock.now(),
+        def validate(b: Path) -> Ok[PlanState] | Err:
+            loaded = self._read_bundle_proposal(b)
+            if is_err(loaded):
+                return loaded
+            proposal_bytes, proposal = loaded.value
+            try:
+                sql_bytes = (b / "query.sql").read_bytes()
+                counts_dir = b / "counts"
+                count_digests = tuple(
+                    sha256_hex(path.read_bytes())
+                    for path in sorted(counts_dir.glob("*.sql"))
                 )
-                if is_err(matrix):
-                    _audit_exec("rejected", reason=_reason_value(matrix.error))
-                    return Err(
-                        error=_reason_value(matrix.error), detail=matrix.detail
-                    )
+            except OSError as exc:
+                return Err(error=RejectReason.BUNDLE_MISSING.value, detail=str(exc))
 
-                # テキスト検査の再実施（defense in depth）— digest 一致で
-                # prepare 時と同一 bytes だが、承認を消費する前にもう一度
-                # 接続前検査を通す（消費後に拒否しても承認は戻らないため）
-                gate = provider.precheck(entry, sql_bytes.decode("utf-8"))
-                if is_err(gate):
-                    _audit_exec("rejected", reason=_reason_value(gate.error))
-                    return gate
+            entry_loaded = self._load_entry(proposal.tool_id)
+            if is_err(entry_loaded):
+                return entry_loaded
+            catalog, entry = entry_loaded.value
+            provider_result = self._resolve_provider(entry)
+            if is_err(provider_result):
+                return provider_result
+            provider = provider_result.value
+            deadline = started + entry.limits.timeout_sec
 
-                # 監査前の deadline 境界（期限切れ後に承認を消費しない）
-                if self._remaining(deadline) <= 0:
-                    reason = ToolConnectorError.DEADLINE_EXCEEDED.value
-                    _audit_exec("rejected", reason=reason)
-                    return Err(error=reason, detail="全体 deadline を超過")
-
-                # 監査に attempted が書けなければ DB アクセス前に fail closed
-                attempted = _audit_exec("execute_attempted")
-                if is_err(attempted):
-                    return Err(
-                        error=RunnerReason.AUDIT_WRITE_FAILED.value,
-                        detail=attempted.detail,
-                    )
-
-                run_id = build_plan_id(
-                    now_iso=self._clock.now(),
-                    nonce=self._nonce(),
+            def _audit_exec(event: str, *, reason: str | None = None, **kw):
+                return self._append_audit(
+                    event,
+                    plan_id=proposal.plan_id,
                     tool_id=proposal.tool_id,
+                    subcommand="execute",
+                    sql_digest=proposal.sql_digest,
+                    reason=reason,
+                    **kw,
                 )
-                consumed = consume_transition(
-                    state, consumed_at=self._clock.now(), run_id=run_id
+
+            holder.update(
+                proposal=proposal,
+                provider=provider,
+                entry=entry,
+                sql_bytes=sql_bytes,
+                deadline=deadline,
+                audit_exec=_audit_exec,
+            )
+
+            state_result = self._read_state(b)
+            if is_err(state_result):
+                _audit_exec("rejected", reason=_reason_value(state_result.error))
+                return state_result
+            state = state_result.value
+
+            matrix = evaluate_execute_matrix(
+                state=state,
+                proposal=proposal,
+                proposal_digest_now=sha256_hex(proposal_bytes),
+                sql_digest_now=sha256_hex(sql_bytes),
+                count_sql_digests_now=count_digests,
+                catalog_digest_now=catalog.digest,
+                now=self._clock.now(),
+            )
+            if is_err(matrix):
+                _audit_exec("rejected", reason=_reason_value(matrix.error))
+                return Err(error=_reason_value(matrix.error), detail=matrix.detail)
+
+            # テキスト検査の再実施（defense in depth）— digest 一致で prepare 時と
+            # 同一 bytes だが、承認を消費する前にもう一度接続前検査を通す
+            gate = provider.precheck(entry, sql_bytes.decode("utf-8"))
+            if is_err(gate):
+                _audit_exec("rejected", reason=_reason_value(gate.error))
+                return gate
+
+            # 監査前の deadline 境界（期限切れ後に承認を消費しない）
+            if self._remaining(deadline) <= 0:
+                reason = ToolConnectorError.DEADLINE_EXCEEDED.value
+                _audit_exec("rejected", reason=reason)
+                return Err(error=reason, detail="全体 deadline を超過")
+
+            return Ok(value=state)
+
+        def audit_attempted() -> Ok[None] | Err:
+            return holder["audit_exec"]("execute_attempted")
+
+        def make_run_id() -> str:
+            return build_plan_id(
+                now_iso=self._clock.now(),
+                nonce=self._nonce(),
+                tool_id=holder["proposal"].tool_id,
+            )
+
+        def do_consume(state: PlanState, run_id: str) -> Ok[PlanState] | Err:
+            consumed = consume_transition(
+                state, consumed_at=self._clock.now(), run_id=run_id
+            )
+            if is_err(consumed):
+                return Err(
+                    error=_reason_value(consumed.error), detail=consumed.detail
                 )
-                if is_err(consumed):
-                    return Err(
-                        error=_reason_value(consumed.error), detail=consumed.detail
-                    )
-                # consumed へ durable 遷移してから DB 実行に入る（single-use）
-                _write_json_durable(
-                    bundle / "state.json", state_to_json_dict(consumed.value)
-                )
-        except FileLockTimeout as exc:
-            return Err(error=RunnerReason.LOCK_TIMEOUT.value, detail=str(exc))
+            return consumed
+
+        def write_state(b: Path, new_state: PlanState) -> None:
+            # consumed へ durable 遷移してから DB 実行に入る（single-use）
+            _write_json_durable(b / "state.json", state_to_json_dict(new_state))
+
+        outcome = self._approval.consume_cas(
+            bundle=bundle,
+            validate=validate,
+            audit_attempted=audit_attempted,
+            make_run_id=make_run_id,
+            do_consume=do_consume,
+            write_state=write_state,
+        )
+        if is_err(outcome):
+            return outcome
 
         # --- consumed 済み: ここからの失敗で承認は復活しない ---
         return self._run_and_publish(
-            bundle, proposal, provider, entry, sql_bytes, run_id, deadline, _audit_exec
+            bundle,
+            holder["proposal"],
+            holder["provider"],
+            holder["entry"],
+            holder["sql_bytes"],
+            outcome.value.run_id,
+            holder["deadline"],
+            holder["audit_exec"],
         )
 
     def _run_and_publish(

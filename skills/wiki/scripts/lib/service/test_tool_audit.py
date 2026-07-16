@@ -22,6 +22,7 @@ from lib.service.tool_audit import (
     AuditError,
     AuditEvent,
     AuditLog,
+    AuditRegistry,
 )
 
 
@@ -279,3 +280,124 @@ class TestLockUsage:
         assert errors == []
         lines = read_lines(tmp_path)  # 全行が独立した JSON として parse できる
         assert len(lines) == 80
+
+
+# ---------------------------------------------------------------------------
+# 監査の一般化 — 許可 enum レジストリ + 出力パス + 汎用 digest の注入
+# ---------------------------------------------------------------------------
+
+
+BROWSER_REGISTRY = AuditRegistry(
+    events={
+        "prepared": True,
+        "approved": True,
+        "delivering": True,
+        "delivered": True,
+        "failed": True,
+        "expired": True,
+        "execute_attempted": True,
+        "rejected": True,
+        # login は plan 非依存の診断イベント（plan_id を載せない）
+        "login": False,
+    },
+    subcommands=frozenset(
+        {"prepare", "approve", "execute", "doctor", "login", "catalog-validate"}
+    ),
+    allowed_reasons=frozenset({"seal_mismatch", "session_expired", "origin_blocked"}),
+    allowed_digest_keys=frozenset({"artifact_digest", "manifest_digest"}),
+    relative_path="outputs/browser-audit.jsonl",
+)
+
+
+def browser_event(**overrides) -> AuditEvent:
+    base = dict(
+        event="prepared",
+        plan_id=PLAN_ID,
+        tool_id="events-web",
+        subcommand="prepare",
+        row_count=42,
+        digests={"artifact_digest": "a" * 64, "manifest_digest": "b" * 64},
+    )
+    base.update(overrides)
+    return AuditEvent(**base)
+
+
+class TestInjectableRegistry:
+    def test_browser_registry_writes_to_its_own_path(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(browser_event())
+        assert is_ok(result), result
+        assert not (tmp_path / AUDIT_RELATIVE_PATH).exists()
+        path = tmp_path / "outputs" / "browser-audit.jsonl"
+        entry = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert entry["event"] == "prepared"
+        assert entry["artifact_digest"] == "a" * 64
+        assert entry["manifest_digest"] == "b" * 64
+        assert entry["row_count"] == 42
+
+    def test_browser_login_event_is_plan_independent(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(
+            AuditEvent(
+                event="login", plan_id=None, tool_id="events-web", subcommand="login"
+            )
+        )
+        assert is_ok(result), result
+
+    def test_browser_login_with_plan_id_is_rejected(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(
+            AuditEvent(
+                event="login",
+                plan_id=PLAN_ID,
+                tool_id="events-web",
+                subcommand="login",
+            )
+        )
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_sql_event_name_is_unknown_to_browser_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """別系統の分離: SQL 固有イベントは browser レジストリでは未知。"""
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(browser_event(event="published"))
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_unknown_digest_key_is_rejected(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(
+            browser_event(digests={"sql_digest": "a" * 64})
+        )
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_non_sha256_digest_value_is_rejected(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(
+            browser_event(digests={"artifact_digest": "SELECT * FROM x"})
+        )
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_browser_reason_is_allowed(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(
+            browser_event(event="rejected", reason="seal_mismatch")
+        )
+        assert is_ok(result), result
+
+    def test_sql_reason_is_unknown_to_browser_registry(self, tmp_path: Path) -> None:
+        log = make_log(tmp_path, registry=BROWSER_REGISTRY)
+        result = log.append(browser_event(event="rejected", reason="ttl_expired"))
+        assert is_err(result)
+        assert result.error == AuditError.INVALID_EVENT
+
+    def test_default_registry_preserves_sql_behavior(self, tmp_path: Path) -> None:
+        """registry を渡さない既定は SQL レジストリ（振る舞い不変）。"""
+        log = make_log(tmp_path)
+        assert is_ok(log.append(make_event()))
+        entry = read_lines(tmp_path)[0]
+        assert entry["sql_digest"] == "d" * 64
