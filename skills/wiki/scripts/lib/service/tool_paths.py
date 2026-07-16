@@ -97,3 +97,24 @@ def resolve_no_symlink_path(
             )
 
     return Ok(value=current)
+
+
+def resolve_declared_dir(
+    *, wiki_root: Path, declared: str
+) -> Ok[Path] | Err[ToolPathError]:
+    """catalog が宣言した directory（絶対 or wiki_root 相対）を検証して解決する。
+
+    絶対宣言は場所として信頼するが、lexical path 上の symlink は全 segment
+    拒否する（delivery 先のすり替えを防ぐ）。
+    """
+
+    if os.path.isabs(declared):
+        declared_abs = Path(os.path.abspath(declared))
+        symlink = _first_symlink_segment(declared_abs)
+        if symlink is not None:
+            return Err(
+                error=ToolPathError.SYMLINK_COMPONENT,
+                detail=f"symlink segment in declared dir: {symlink.name!r}",
+            )
+        return Ok(value=declared_abs)
+    return resolve_no_symlink_path(base=wiki_root, relative=declared)
