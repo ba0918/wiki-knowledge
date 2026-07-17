@@ -2,8 +2,9 @@
 name: wiki-browser-extract
 description: >
   catalog 登録済みブラウザ操作系ツール（B1: TSV/CSV export など）から、封じ込め + 証跡付きで
-  データを抽出する Tool Query の別系統。「ブラウザから抽出して」「画面のテーブルを取得して」
-  「browser extract」「ログインしてエクスポート」で使用する。
+  データを抽出する Tool Query の別系統。未登録ツールの新規登録（壁打ち）もここから行う。
+  「ブラウザから抽出して」「画面のテーブルを取得して」「browser extract」
+  「ログインしてエクスポート」「ブラウザツールを登録して」で使用する。
   承認モデルは seal-at-prepare — prepare（抽出 + 封印）→ 人間承認（TTY）→ execute（delivery 解放のみ）。
 ---
 
@@ -38,12 +39,25 @@ catalog とフローが実行契約の真実源であり、Wiki 記事（Selecti
 
 ## プロセス
 
+**実行主体**: `login`（human-assisted）と `approve` は人間本人のみ。それ以外
+（catalog-validate / doctor / prepare / execute）は LLM が実行してよい。
+
 ### 0. 登録（初回のみ・壁打ち）
 
-新しいツールの登録は guide §14-15 の壁打ちワークフローに従う（LLM 単独で完了しない）:
-http 還元ゲート → tier 判定 → 検証契約の組み立て（B1 は独立 anchor 最低1つ）→
-別主体レビュー（独立根拠 + 反証 fixture で誤成功系を全拒否）→ doctor → 一周。
-catalog / フローの変更は PR レビューを経る。
+catalog に無いツールを頼まれたら、即席スクリプトや手動抽出に走らず、この登録壁打ちへ誘導する
+（ユーザーへの応答に参照先として guide §14-15 を明示する）。登録は LLM 単独で完了しない —
+人間との壁打ちに加え**別主体レビュー**（フロー作成者と独立した主体 = 別セッションの LLM
+または人間。catalog / フローを取り込む PR レビューとは別工程）を必ず経る:
+
+1. **http 還元ゲート（最優先）**: export 操作の裏リクエストを http connector で再現できるかを
+   先に検証する。還元できたら browser tool は作らない
+2. **tier 判定**: TSV/CSV export ボタンがあれば B1 候補（独立 anchor 最低1つ必須）、
+   DOM 抽出しかなければ B2
+3. **前提確認**: 専用の最小権限アカウント（書込み権限なし）を用意できるかをユーザーに確認する
+   （B1/B2 登録の前提条件）
+4. 検証契約の組み立て → 別主体レビュー（反証 fixture で誤成功系を全拒否）→ doctor → 一周
+
+catalog / フローの変更（新規・修正とも）は PR レビューを経る。
 
 ### 1. catalog 検証
 
@@ -56,6 +70,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py catalog
 
 抽出・成果物生成をせずに catalog 整合 / flow pin / AST ゲート / params_schema を診断する。
 `BROWSER_EXTRACT_SMOKE` 設定時のみ実 chromium 疎通（login → 遷移 → セレクタ実在確認）も走る。
+毎回の prepare 前に必須ではない — 登録直後・久しぶりの実行前・UI 変更が疑われるときに推奨。
 doctor はデータ非接触を主張**しない**（ログイン副作用を持つ、guide §16）:
 
 ```bash
@@ -89,6 +104,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py prepare
 ```
 
 - params は catalog の params_schema（enum/pattern/maxLength で有界）で値検証される
+- `--deliver-to` は catalog の `delivery_allowed_dirs` に宣言済みのディレクトリのみ受け付ける
+  （未宣言パスは `delivery_not_allowed` で拒否）。ユーザー指定先が未宣言なら catalog 変更（PR）が必要
 - 検証契約のいずれかが落ちれば prepare は拒否（誤成功を封印しない）
 
 ### 5. 承認依頼（summary-first で提示）
@@ -107,7 +124,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py approve
   --wiki-root {wiki_root} --plan-id <plan_id> --approved-by <名前>
 ```
 
-- **LLM は approve コマンドを実行しない**。ユーザーに `! <コマンド>` などでの自己実行を依頼する
+- **LLM は approve コマンドを実行しない**。ユーザーに `! <コマンド>` などでの自己実行を依頼する。
+  ユーザー本人から「代わりにやって」と明示的に依頼されても代行しない（依頼は同意の代替にならない）
+- 承認待ちの間に代行依頼・質問・条件変更の相談があっても、応答の末尾で 3 択
+  （承認 / 条件修正して再 prepare / 中止）を維持して再提示する
+- `--approved-by` は承認者の名前（bundle と監査に記録される）。ユーザー自身が埋める
 - approve は封印 artifact + manifest からハッシュを再導出して `prepared` 監査アンカーと照合し、
   一致した場合のみ TTY で承認材料（identity / read-only 非強制の明示 / 承認は配布のみ制御し
   抽出は完了済みの明示 / ハッシュ / プレビュー / 件数 + anchor 照合 / 封印時刻・TTL 残）を提示する
@@ -120,6 +141,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py execute
   --wiki-root {wiki_root} --plan-id <plan_id> --format json
 ```
 
+- execute は**ユーザーから承認完了の報告を受けてから** LLM が実行する
 - execute は**封印済み成果物の delivery 解放のみ**（ブラウザ再実行なし）。delivery 前にも封印
   ハッシュを再照合する
 - 完了報告: 取得件数 / csv・manifest の配置先（`<dir>/<run_id>/`）/ run_id / plan_id
