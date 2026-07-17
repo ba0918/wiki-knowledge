@@ -21,6 +21,8 @@
 ## practices
 
 - [[wikilink-conversion-strategies]] — wikilink ↔ 標準 Markdown link の変換戦略と併記パターン
+- [[inquiry-event-point-missing]] — イベント pt 未付与問い合わせのツール非依存調査手順（3層分解・settlement window ゲート）
+- [[inquiry-subscription-mismatch]] — 月額課金不整合問い合わせの境界跨ぎ調査手順（不整合パターン閉集合5分類）
 
 ## references
 

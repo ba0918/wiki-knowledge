@@ -18,6 +18,11 @@ _WIKI_SKILL = Path(__file__).resolve().parent.parent
 _GUIDE = _WIKI_SKILL / "references" / "support-investigation-guide.md"
 _TEMPLATE = _WIKI_SKILL / "assets" / "support-report-template.md"
 
+# skills/wiki/ -> repo root -> .wiki/concepts/
+_CONCEPTS = _WIKI_SKILL.parent.parent / ".wiki" / "concepts"
+_ARTICLE_SLUGS = ("inquiry-event-point-missing", "inquiry-subscription-mismatch")
+_RAW_SOURCE = "raw/files/usersupport-inquiry-verification-idea.md"
+
 # Product/tool identifiers that must NOT appear in the norm body — they are
 # allowed only inside the isolated "本リポジトリでの一適用例" example section,
 # because the tool-independence of the norm is the top-priority arbitration.
@@ -135,3 +140,60 @@ class TestReportTemplate:
     def test_report_is_for_support_staff_not_customer(self):
         body = self._template()
         assert "サポート担当" in body, "サポート担当向けである旨の注意書きが欠落"
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """Return (frontmatter_block, body) for a `---` fenced YAML frontmatter."""
+    assert text.startswith("---\n"), "frontmatter が `---` で始まっていない"
+    end = text.index("\n---", 4)
+    return text[4:end], text[end + 4:]
+
+
+class TestReferenceArticles:
+    """The two reference articles must be tool-independent practices records.
+
+    Tool-independence is the top-priority arbitration: these articles must not
+    structurally depend on tool-query / browser-extract / Selection Recipe.
+    """
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_exists(self, slug):
+        _read(_CONCEPTS / f"{slug}.md")
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_category_is_practices(self, slug):
+        fm, _ = _split_frontmatter(_read(_CONCEPTS / f"{slug}.md"))
+        assert "category: practices" in fm, f"{slug}: category が practices でない"
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_type_is_wiki(self, slug):
+        fm, _ = _split_frontmatter(_read(_CONCEPTS / f"{slug}.md"))
+        assert "type: wiki" in fm, f"{slug}: type が wiki でない"
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_source_refs_points_to_raw_idea(self, slug):
+        fm, _ = _split_frontmatter(_read(_CONCEPTS / f"{slug}.md"))
+        assert _RAW_SOURCE in fm, f"{slug}: source_refs が raw の idea ファイルを指していない"
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_no_selection_recipe_tag(self, slug):
+        fm, _ = _split_frontmatter(_read(_CONCEPTS / f"{slug}.md"))
+        assert "selection-recipe" not in fm, (
+            f"{slug}: selection-recipe タグは構造的依存を作るため付けてはならない"
+        )
+
+    @pytest.mark.parametrize("slug", _ARTICLE_SLUGS)
+    def test_body_is_tool_independent(self, slug):
+        body = _read(_CONCEPTS / f"{slug}.md").lower()
+        leaked = [t for t in _TOOL_TOKENS if t in body]
+        assert not leaked, (
+            f"{slug}: ツール識別子が本文に含まれる {leaked}. 調査経路は抽象カテゴリの"
+            "スロット（API 系 / データ照会系 / 画面経由系）で記述すること"
+        )
+
+    def test_articles_mutually_wikilink(self):
+        a, b = _ARTICLE_SLUGS
+        body_a = _read(_CONCEPTS / f"{a}.md")
+        body_b = _read(_CONCEPTS / f"{b}.md")
+        assert f"[[{b}]]" in body_a, f"{a} が {b} へ wikilink していない（orphan 回避）"
+        assert f"[[{a}]]" in body_b, f"{b} が {a} へ wikilink していない（orphan 回避）"
