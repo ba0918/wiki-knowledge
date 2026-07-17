@@ -10,3 +10,4 @@ outputs/deliveries/
 outputs/browser-plans/
 outputs/browser-audit.jsonl
 outputs/browser-audit.jsonl.lock
+outputs/support-reports/

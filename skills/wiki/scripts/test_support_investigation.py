@@ -16,6 +16,7 @@ import pytest
 # skills/wiki/scripts/ -> skills/wiki/
 _WIKI_SKILL = Path(__file__).resolve().parent.parent
 _GUIDE = _WIKI_SKILL / "references" / "support-investigation-guide.md"
+_TEMPLATE = _WIKI_SKILL / "assets" / "support-report-template.md"
 
 # Product/tool identifiers that must NOT appear in the norm body — they are
 # allowed only inside the isolated "本リポジトリでの一適用例" example section,
@@ -95,3 +96,42 @@ class TestInvestigationGuide:
             f"規範本体（例示節より前）にツール識別子が漏れている: {leaked}. "
             "ツール名は '本リポジトリでの一適用例' 節にのみ置くこと"
         )
+
+
+class TestReportTemplate:
+    """support-report-template.md must carry every load-bearing field."""
+
+    def _template(self) -> str:
+        return _read(_TEMPLATE)
+
+    def test_five_split_sections(self):
+        body = self._template()
+        for token in ("観測事実", "適用ルール", "推定原因", "確信度", "不足情報"):
+            assert token in body, f"5分割様式の区画 '{token}' が欠落"
+
+    def test_confidence_three_values_fixed_vocabulary(self):
+        body = self._template()
+        for token in ("高", "中", "低"):
+            assert token in body, f"確信度3値 '{token}' が欠落"
+
+    def test_timeline_field(self):
+        body = self._template()
+        assert "タイムライン" in body, "タイムライン欄が欠落"
+
+    def test_timeline_carries_time_type_labels(self):
+        body = self._template()
+        assert "event" in body and "processing" in body, "時刻種別ラベルが欠落"
+
+    def test_settlement_window_field(self):
+        body = self._template()
+        assert "settlement window" in body, "settlement window 確認欄が欠落"
+
+    def test_impossibility_taxonomy_present(self):
+        body = self._template()
+        for token in ("権限不足", "照合キー欠落", "処理中・再照会待ち",
+                      "登録ツール経路なし", "SoT 間不一致", "retention"):
+            assert token in body, f"調査不能定型の分類 '{token}' が欠落"
+
+    def test_report_is_for_support_staff_not_customer(self):
+        body = self._template()
+        assert "サポート担当" in body, "サポート担当向けである旨の注意書きが欠落"
