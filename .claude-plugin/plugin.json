@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "LLM Wiki Knowledge Base — source documents to interlinked Markdown wiki with ingest, compile, query, lint pipelines",
   "author": {
     "name": "mizumi"
