@@ -65,6 +65,10 @@ Dispatch on the leading `$ARGUMENTS` keyword:
 
 Follow `page-template.json` — fill every required field. Put the
 `{wiki_root}`-relative path to the source in `source_refs`.
+Pick `category` from `categories.json` by the source's nature
+(workflow/procedure → `practices`, lookup material → `references`,
+tool description → `tools`, otherwise `concepts`) — the template's
+`concepts` is only a placeholder.
 
 ### Body
 
@@ -85,11 +89,14 @@ Run in this order:
 
 1. **Backlink Audit** (required — skipping this turns the wiki into a
    one-directional blog): `grep` every existing article for mentions
-   that should link to the new article. Add `[[new-slug]]` links and
-   `related` frontmatter entries; bump `updated`.
+   that should link to the new article. A mention of the new
+   article's subject counts; a merely shared word does not. Add
+   `[[new-slug]]` links and `related` frontmatter entries; bump
+   `updated`.
 2. **Update index and AGENTS.md**: add the new article to
-   `{wiki_root}/index.md` (categorized, one-line summary). Update the
-   Articles section of `AGENTS.md`.
+   `{wiki_root}/index.md` (categorized, one-line summary — create the
+   category section if it does not exist yet). Update the Articles
+   section of `AGENTS.md`.
 3. **Wikilink rendering**:
    `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/`
 4. **log_append**:
@@ -97,7 +104,8 @@ Run in this order:
    python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py compile \
      --wiki-root {wiki_root} --title "{Title}" --word-count {N} --sources {N}
    ```
-   `word_count` matches `wc -w`.
+   `word_count` matches `wc -w` over the saved article file
+   (frontmatter included, measured after step 3's rendering).
 
 **Note**: compile alone does NOT run `graph_gen` or `lint`.
 `wiki-cycle` orchestrates them.
@@ -111,6 +119,10 @@ Generated: {N} article(s)
   ...
 Next: `wiki-lint` for quality checks, or `wiki-cycle --compile-only` for compile + lint together
 ```
+
+Zero uncompiled sources: keep the same header, print
+`Generated: 0 article(s) — no uncompiled sources` and omit the
+per-article lines.
 
 ---
 

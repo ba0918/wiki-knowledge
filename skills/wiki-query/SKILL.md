@@ -42,10 +42,16 @@ If missing, point the user at `wiki-init`. Details in
    - Choose the format based on the question: prose for facts, a table
      for comparisons, numbered lists for procedures.
 4. **Offer to save**: after answering, ask whether to save as a wiki
-   article.
+   article. If the user already declined promotion in the request,
+   skip the ask and take the not-saving branch (its
+   `outputs/queries/` save still happens).
 
 **Do NOT answer from general knowledge.** Read wiki articles first. If
 articles conflict, present both.
+
+Only wiki articles are citable (`[[slug]]`). Knowledge that exists
+only under `raw/` is a gap: name the topic, point at the raw source,
+and suggest `wiki-compile` — do not cite raw files as answers.
 
 ## Saving the answer (Wiki Promote)
 
@@ -62,7 +68,9 @@ If not saving:
 
 1. Save the answer to
    `{wiki_root}/outputs/queries/{YYYYMMDD}-{slug}.md`.
-   - Derive `{slug}` from the question's subject as kebab-case English.
+   - Derive `{slug}` from the question's subject as kebab-case
+     English (multi-topic questions: use the dominant topic, or a
+     compact combination).
    - Store the full answer verbatim (do not summarize).
    - Frontmatter:
    ```yaml
@@ -94,7 +102,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/querylog_append.py \
   [--promoted --promoted-to concepts/{slug}.md]
 ```
 
-- `--consulted`: every article path read (relative to `{wiki_root}`).
+- `--consulted`: every article whose full text you read, cited or
+  not (paths relative to `{wiki_root}`). `sources_consulted` and the
+  completion message's `Consulted:` use this same set.
 - `--answer-file`: path to the saved answer text. `sources_cited` is
   extracted from it.
 - `--gap-topics`: gap topic names (omit if none).

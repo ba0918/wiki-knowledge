@@ -12,20 +12,20 @@ related: []
 
 # PAGE_TITLE
 
-> 1-2文の要約。この記事が何を扱うかを明示する。
+> 1–2 sentence summary. State explicitly what this article covers.
 
-## 概要
+## Overview
 
-ソースドキュメントに基づく主要な内容を記述する。
+Describe the main content, grounded in the source documents.
 
-## 詳細
+## Details
 
-必要に応じてセクションを追加する。
+Add sections as needed.
 
-## 関連
+## Related
 
-- [[related-slug]] — 関連トピックへのリンク
+- [[related-slug]] — link to a related topic
 
-## 出典
+## Sources
 
-- [ソースタイトル](../raw/articles/SOURCE_SLUG.md)
+- [Source title](../raw/articles/SOURCE_SLUG.md)

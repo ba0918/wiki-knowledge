@@ -33,9 +33,14 @@ directory.
 ## Security scan (required)
 
 Run `security_scan.py` per [security.md](../wiki/references/security.md).
-Exit 1 aborts the ingest.
+Exit 1 aborts the ingest: save nothing under `raw/`, append nothing to
+`log.md`, and do not print the completion message. Instead print the
+scan output verbatim (the ✅/❌ summary plus its Findings lines), state
+that the ingest was aborted because of them, and propose remediation
+(redact or remove the flagged lines, then re-ingest).
 
-Print the script's ✅/❌ summary verbatim:
+Print the script's ✅/❌ summary verbatim — the script's actual output
+wins; the block below only illustrates the shape:
 
 ```
 ✅ Path traversal: OK
@@ -51,12 +56,14 @@ Print the script's ✅/❌ summary verbatim:
    | URL / inline text | `raw/articles/` | `{YYYYMMDD}-{slug}.md` |
    | Single local file | `raw/files/` | Original filename verbatim |
    | Repo flow | `raw/files/{repo-slug}/` | Original filename verbatim |
+
+   `{slug}`: kebab-case English derived from the title (step 3).
 2. Run the security scan (pass the filename from step 1 to
    `--filename`).
 3. Attach frontmatter:
    ```yaml
    ---
-   title: Document title              # required. Base on the source H1, refined to reflect content
+   title: Document title              # required. Base on the source H1, refined to reflect content; inline text without a heading: derive a short title from the text's subject (typically its first sentence)
    scraped: YYYY-MM-DD                # required (ingest date)
    source_url: https://example.com    # attach only for URL inputs
    source_path: path/to/original.md   # attach only for local-file inputs (tracks the origin)
@@ -69,12 +76,15 @@ Print the script's ✅/❌ summary verbatim:
    python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py ingest \
      --wiki-root {wiki_root} --slug {slug} --source-kind {source_kind}
    ```
+   `{source_kind}`: `url` / `file` / `inline` (the repo flow uses
+   `repo @ {short-hash}`).
 
 ## Completion message
 
 ```
 ── ingest complete ──
-Saved to: {wiki_root}/raw/articles/{filename}
+{security scan ✅/❌ summary, verbatim}
+Saved to: {destination decided in step 1}/{filename}
 Frontmatter:
   title: {title}
   source_url: {url}        ← only for URL inputs

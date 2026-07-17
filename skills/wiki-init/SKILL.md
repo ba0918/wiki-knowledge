@@ -16,7 +16,9 @@ Path resolution follows [paths.md](../wiki/references/paths.md).
 
 If the project root's `AGENTS.md` (or `CLAUDE.md`) already has
 `wiki_root`, ask whether to reinitialize. (Skip the confirmation only if
-neither file exists.)
+neither file exists.) A pre-existing wiki directory alone — without
+`wiki_root` in either file — does NOT count as initialized: proceed,
+merging any existing files per the rules below.
 
 ## Procedure
 
@@ -55,11 +57,18 @@ neither file exists.)
      - Set `wiki_root` to the real path.
      - Expand `{wiki_root}` in the body to the real path. (Leave other
        placeholders like `{slug}` alone.)
-     - `SCOPE_DESCRIPTION`: 1–2 sentences if the purpose is clear;
-       otherwise "_Scope not set. Fill this in on first ingest._"
+     - `SCOPE_DESCRIPTION`: default to the exact fallback
+       "_Scope not set. Fill this in on first ingest._". Write 1–2
+       sentences instead ONLY when the user's request itself states
+       the wiki's purpose — never infer scope from repo contents.
+   - **If `AGENTS.md` exists but has no `wiki_root`**: keep the
+     existing content untouched and append the template's wiki
+     sections (`## Wiki Knowledge Base` and everything below it) to
+     the end of the file, filling placeholders the same way. Skip the
+     template's preamble — the file already has its own heading.
    - **If `AGENTS.md` already has `wiki_root`**: keep the existing value.
-   - **If `CLAUDE.md` does not exist**: create a `CLAUDE.md` that only
-     contains `@AGENTS.md`.
+   - **Regardless of the branch taken**: if `CLAUDE.md` does not
+     exist, create a `CLAUDE.md` that only contains `@AGENTS.md`.
 5. Point the user to the next step (`wiki-ingest`) in the completion
    message.
 
@@ -71,3 +80,6 @@ Wiki root: {wiki_root}/
 Created: raw/articles/, raw/files/, concepts/, outputs/queries/, outputs/reports/, schema/
 Next: `wiki-ingest <URL or file>` to bring in a source
 ```
+
+If some items already existed and were merged instead of created,
+say so on the `Created:` line (e.g. `Created: … (.gitignore merged)`).

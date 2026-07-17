@@ -34,6 +34,12 @@ Pre-flight diagnostics use `doctor` (below).
 **Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
 If missing, point the user at `wiki-init`.
 
+**Never touch the data source directly** — no ad-hoc `sqlite3` /
+driver connections, not even read-only schema peeks. Every access
+(including COUNTs and schema discovery) goes through
+`tool_query_run.py`, which enforces and audits it. Schema knowledge
+comes from the catalog, the Recipe, or the requester.
+
 **Prerequisite**: the target tool must be registered in
 `{wiki_root}/tools/catalog.json` (git-managed). The catalog is the
 execution contract's source of truth; wiki articles (Selection Recipes)
@@ -81,6 +87,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
   --key-columns <col>... --expected-rows <min>:<max> --deliver-to <dir> --format json
 ```
 
+- `<step-label>` must not contain `=` — the option splits on the
+  first `=`. Use plain-language labels ("all users", "active",
+  "minus test accounts"), never SQL fragments like `status=active`.
+- `--expected-rows`: derive the band from the Recipe's recorded row
+  counts or the funnel's final COUNT estimate. It is the
+  drift-detection line checked again at execute time.
 - **COUNTs run before approval**: prepare's funnel COUNT queries go
   through the same enforcement as real execution (connector defense /
   allowed_tables or endpoint allowlist / timeout) and are audited. Say

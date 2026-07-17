@@ -7,8 +7,10 @@ description: >
 
 # Wiki Cycle
 
-Orchestrator that runs Ingest → Compile → Lint end to end. Holds no
-business logic — delegates to each leaf skill.
+Orchestrator that runs Ingest → Compile → Graph Gen → Lint end to
+end. Holds no business logic — delegates to each leaf skill, and each
+delegated skill runs in full (for lint that includes Trust Score, Gap
+Detection, and the LLM-driven checks).
 
 Script paths resolve per
 [paths.md](../wiki/references/paths.md).
@@ -30,8 +32,11 @@ Script paths resolve per
 
 ## Flow definitions
 
-Dispatch on arguments. `graph_gen` **always** runs between compile and
-lint (skipping it makes lint exit 2).
+Dispatch on arguments. `graph_gen` **always** runs immediately before
+lint — after compile when compile runs (skipping it makes lint exit
+2). The cycle's `graph_gen` run satisfies the lint skill's own
+graph_gen prerequisite: do not run it a second time inside the lint
+delegation.
 
 ### Default flow (source specified)
 
@@ -71,6 +76,12 @@ it always runs non-interactively (`--yes`).
 - Lint 🔴 Error → propose a re-lint after fixes.
 
 ## Completion message
+
+The cycle summary is the ONLY final message — leaf skills' completion
+messages (`── compile complete ──` etc.) are internal and must not be
+emitted. The template below shows the fully-populated form; a step
+that did not run prints just `skipped` (drop its placeholders, e.g.
+`ingest: skipped`).
 
 ```
 ── cycle complete ──
