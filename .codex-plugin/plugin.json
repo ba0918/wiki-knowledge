@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "LLM Wiki Knowledge Base — source documents to interlinked Markdown wiki with trust scoring and gap detection",
   "author": {
     "name": "ba0918"
