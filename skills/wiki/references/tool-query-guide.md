@@ -1,140 +1,176 @@
-# Tool Query ガイド — dry-run 承認手順と Selection Recipe
+# Tool Query Guide — Dry-run Approval and Selection Recipes
 
-wiki-tool-query スキルの詳細リファレンス。運用フローの本体は
-`skills/wiki-tool-query/SKILL.md`、実行契約の真実源は `{wiki_root}/tools/catalog.json`
-（schema: `{wiki_root}/schema/tool-catalog-schema.json`）。
+Detailed reference for the `wiki-tool-query` skill. The operational
+flow's main text is `skills/wiki-tool-query/SKILL.md`. The execution
+contract's source of truth is `{wiki_root}/tools/catalog.json` (schema:
+`{wiki_root}/schema/tool-catalog-schema.json`).
 
-## ファネル提示フォーマット
+## Funnel presentation format
 
-承認依頼はデータの絞り込み過程が一目で追える形で提示する。**各段で何件落ちたか**が
-承認判断の中心情報になる:
+Present approval requests so the data-narrowing process reads at a
+glance. **How many rows dropped at each step** is the central input
+for the approval decision:
 
 ```
-対象定義: ev-2026 参加登録者のうち返金を受けていない人（補填対象）
+Target: ev-2026 registrants who have NOT received a refund (compensation targets)
 inclusion:
   - registrations.event = 'ev-2026'
 exclusion:
-  - refunds に user_id が存在する人
-ファネル:
-  ev-2026 登録者: 412 件
-  → 返金なし: 397 件（-15）
-想定件数レンジ: 380〜410 件
-delivery 先: outputs/deliveries
+  - user_id present in refunds
+Funnel:
+  ev-2026 registrants: 412
+  → without refunds: 397 (-15)
+Expected rows: 380–410
+Delivery: outputs/deliveries
 tool: events-db / plan_id: 20260716... / sql_digest: ab12...
 ```
 
-<details> で SQL 本文を添付（本文は bundle の `query.sql` が唯一の実行対象。表示突合には
-`sql_display_digest` = trim + 改行統一のみの保守的正規化 digest を使える）。
+Attach the SQL body in `<details>` (the body is executed from the
+bundle's `query.sql` — that's the only executable artifact. For
+display cross-check, `sql_display_digest` — a conservative
+normalization digest of trim + newline unification — is available).
 
-### COUNT SQL の組み方
+### Writing COUNT SQL
 
-- 1 段 = 1 ファイル。本実行 SQL の WHERE 条件を先頭から 1 つずつ足していく
-- 各 COUNT は「1 行 1 列の非負整数」を返すこと（それ以外は `count_result_invalid` で拒否）
-- label は 64 文字以内・制御文字なし・重複なし。bundle 内ファイル名には使われない（連番 `counts/{nn}.sql`）
+- One step = one file. Add WHERE conditions from the main SQL one at a
+  time.
+- Each COUNT must return "one row, one column, non-negative integer".
+  Anything else rejects as `count_result_invalid`.
+- The label is ≤ 64 chars, no control characters, no duplicates. It
+  does NOT become the bundle filename (bundle uses `counts/{nn}.sql`).
 
-### 想定件数レンジ（expected_rows）
+### Expected-rows range (`expected_rows`)
 
-- 実行時制約。本実行の実測件数がレンジ外だと **publish されず** `rows_out_of_range` で拒否される
-- ファネル最終段の COUNT を中心に、prepare〜execute 間のデータ変動を見込んだ幅を取る
-  （min = max にすると完全一致を要求できる）
+- Runtime constraint. If the measured row count is outside the range,
+  the result is **not published** — rejected as `rows_out_of_range`.
+- Center the range on the last funnel COUNT, widening for the data
+  drift possible between prepare and execute. Setting `min = max`
+  requires an exact match.
 
-## 失敗時の reason code 早見表
+## Reason codes on failure (cheatsheet)
 
-| reason | 意味 | 次の一手 |
+| reason | Meaning | Next step |
 |---|---|---|
-| `not_approved` | 未承認（draft）で execute | approve を依頼する |
-| `already_consumed` | replay（二重 execute） | 新 prepare → 再承認 |
-| `ttl_expired` | plan の期限切れ（**prepare 起算 24h**。承認時刻ではない） | 新 prepare → 再承認 |
-| `sql_digest_mismatch` / `count_sql_digest_mismatch` | bundle 内 SQL の改変検出 | bundle を破棄し新 prepare |
-| `proposal_digest_mismatch` | 承認後の proposal 書き換え検出 | 同上 |
-| `catalog_digest_mismatch` | catalog が prepare 後に変更された | 新 prepare（新しい契約で承認し直す） |
-| `rows_out_of_range` | 実測件数がレンジ外 | 原因を確認しレンジ or 条件を見直して新 prepare |
-| `row_limit_exceeded` 等 | catalog の limits 超過 | 条件で絞るか catalog 変更を PR で提案 |
-| `delivery_conflict` | delivery 先に同名 run が存在 | そのまま再 execute は不可（承認消費済み）。新 prepare |
-| `audit_write_failed` | 監査が書けない（fail closed） | ディスク・権限を確認。DB アクセス前なら承認は未消費 |
+| `not_approved` | Executed while draft (unapproved) | Ask for approval |
+| `already_consumed` | Replay (double execute) | New prepare → re-approve |
+| `ttl_expired` | Plan expired (**counted from prepare, 24h**; NOT approval time) | New prepare → re-approve |
+| `sql_digest_mismatch` / `count_sql_digest_mismatch` | Bundle SQL was modified | Discard the bundle, prepare again |
+| `proposal_digest_mismatch` | Proposal was rewritten after approval | Same |
+| `catalog_digest_mismatch` | Catalog changed after prepare | New prepare (re-approve under the new contract) |
+| `rows_out_of_range` | Measured rows outside the expected range | Investigate; adjust range or conditions and prepare again |
+| `row_limit_exceeded` (and similar) | Catalog `limits` exceeded | Narrow conditions or propose a catalog change via PR |
+| `delivery_conflict` | Delivery destination already has a run with the same id | Cannot re-execute (approval consumed). New prepare |
+| `audit_write_failed` | Audit could not be written (fail closed) | Check disk / permissions. If it happened before DB access, approval is unconsumed |
 
-## Connector 別の書き方（Phase A2）
+## Connectors (Phase A2)
 
-catalog の `type` で connector が決まる: `sqlite` / `postgres` / `mysql` / `http`。
-承認フロー（prepare → approve → execute）・監査・delivery・single-use は**全 type 共通**で、
-type 差は接続と enforcement 層だけに閉じる。
+The catalog's `type` picks the connector: `sqlite` / `postgres` /
+`mysql` / `http`. The approval flow (prepare → approve → execute),
+audit, delivery, and single-use are **shared across all types**. The
+per-type differences are confined to connection and enforcement.
 
-### postgres / mysql（SQL 系リモート DB）
+### postgres / mysql (SQL remote DBs)
 
-- 接続は catalog の field から組み立てる（`host` / `port` / `dbname` / `user` 必須）。
-  **ユーザー入力の DSN 文字列は受け付けない**（injection 面の縮小）
-- `credential_ref` は **必須**。解決するのは password のみ（user は catalog field で宣言）
-- SQL は sqlite と同じ `--sql-file` / `--count-sql` で渡す。**静的 SQL 検査層**（sqlglot）が
-  接続前に (1) 単一 SELECT / WITH のみ (2) relation allowlist 照合 (3) 未知関数の拒否 を行う
-- `allowed_tables` は**完全修飾**（`schema.table` / `db.table`）または**未修飾**で宣言:
-  - postgres: 未修飾名は `connection.default_schema`（既定 `public`）へ静的展開。unquoted 識別子は
-    小文字化して照合（`Users` == `users`）。quoted `"Users"` は別物として扱う
-  - mysql: `connection.dbname` を既定 database として展開。table 名照合は**大文字小文字を区別**する
-    （MySQL の設定依存を避けるため case-sensitive を既定とする）
-  - JOIN・サブクエリ・CTE・view の実 relation もすべて allowlist 照合される。CTE 名・derived alias は
-    relation 扱いしない（underlying の実テーブルのみ照合）
-- **関数は sqlglot が組み込みとして認識するもののみ許可**。未知関数（`pg_read_file` /
-  `LOAD_FILE` / ユーザー定義関数 / LATERAL テーブル関数）は fail closed で拒否される
-  （`sql_gate_function_not_allowed`）。`count` / `sum` / `upper` / `coalesce` / window 関数等は通る
+- Connection is assembled from catalog fields (`host` / `port` /
+  `dbname` / `user` required). **User-input DSN strings are not
+  accepted** (reduces injection surface).
+- `credential_ref` is **required**. Only the password is resolved from
+  it (the user is declared as a catalog field).
+- SQL is passed the same way as sqlite: `--sql-file` / `--count-sql`.
+  The **static SQL gate** (sqlglot) runs before connection and:
+  (1) accepts single SELECT / WITH only, (2) matches against the
+  relation allowlist, (3) rejects unknown functions.
+- `allowed_tables` can be **fully qualified** (`schema.table` /
+  `db.table`) or **unqualified**:
+  - postgres: unqualified names are statically expanded against
+    `connection.default_schema` (default `public`). Unquoted
+    identifiers are lowercased for the match (`Users` == `users`).
+    Quoted `"Users"` is treated as distinct.
+  - mysql: `connection.dbname` is the default database used for
+    expansion. Table name matching is **case-sensitive** (avoiding
+    MySQL's config-dependent case handling — case-sensitive by
+    default).
+  - JOINs, subqueries, CTEs, and view underlying relations are all
+    matched against the allowlist. CTE names and derived aliases are
+    NOT relations (only underlying real tables are checked).
+- **Only functions sqlglot recognizes as built-in are allowed.**
+  Unknown functions (`pg_read_file` / `LOAD_FILE` / user-defined
+  functions / LATERAL table functions) are rejected fail-closed
+  (`sql_gate_function_not_allowed`). `count` / `sum` / `upper` /
+  `coalesce` / window functions pass.
 
-#### read-only role の設定（第一防御 — 必ず設定する）
+#### Read-only role setup (primary defense — always configure)
 
-pg / mysql には sqlite の authorizer（実行エンジン自身の判定）に相当するものがない。
-**DB 側の read-only 専用 role が第一防御**であり、静的 SQL 検査層 + session read-only は
-その補完。専用 role を必ず用意すること:
+pg / mysql have no equivalent of sqlite's authorizer (the engine's own
+judgment). **A DB-side read-only role is the primary defense** —
+static SQL + session read-only are supplemental. Always prepare a
+dedicated role:
 
 ```sql
--- PostgreSQL: SELECT 権限のみの専用 role
+-- PostgreSQL: SELECT-only role
 CREATE ROLE wiki_readonly LOGIN PASSWORD '...';
 GRANT CONNECT ON DATABASE analytics TO wiki_readonly;
 GRANT USAGE ON SCHEMA public TO wiki_readonly;
 GRANT SELECT ON public.users, public.registrations TO wiki_readonly;
--- INSERT/UPDATE/DELETE/TRUNCATE/CREATE は付与しない
+-- Do NOT grant INSERT / UPDATE / DELETE / TRUNCATE / CREATE
 ```
 
 ```sql
--- MySQL: SELECT 権限のみの専用ユーザー
+-- MySQL: SELECT-only user
 CREATE USER 'wiki_readonly'@'%' IDENTIFIED BY '...';
 GRANT SELECT ON billing.users TO 'wiki_readonly'@'%';
 GRANT SELECT ON billing.invoices TO 'wiki_readonly'@'%';
--- CREATE TEMPORARY TABLES は付与しない（後述の一時テーブル穴を塞ぐため）
+-- Do NOT grant CREATE TEMPORARY TABLES (closes the temp-table hole below)
 ```
 
-`doctor` サブコマンドがこの role の read-only 性を introspection で機械検証する（後述）。
+The `doctor` subcommand mechanically verifies this role's read-only
+property via introspection (below).
 
-#### read-only session の実行順序契約
+#### Read-only session execution-order contract
 
-- **postgres**: 接続直後・transaction 未開始の時点で `Connection.read_only = True` を設定し、
-  その後に開始される明示 transaction 内で named cursor（server-side cursor）を開く。
-  `statement_timeout` と `search_path=<default_schema>` は接続オプションで渡し、静的 SQL gate と
-  実行時の未修飾 relation の解決先を一致させる
-- **mysql**: autocommit 状態（transaction 開始前）で `SET SESSION TRANSACTION READ ONLY` +
-  `max_execution_time` を発行し、その後 `START TRANSACTION` → `SSCursor`（unbuffered）で実行
-- 巨大結果は server-side cursor で行数上限まで fetch した時点で打ち切る（client 全バッファしない）
+- **postgres**: set `Connection.read_only = True` before any
+  transaction starts, then open a named cursor (server-side) inside
+  the explicit transaction. Pass `statement_timeout` and
+  `search_path=<default_schema>` as connection options so the static
+  SQL gate and runtime resolution of unqualified relations agree.
+- **mysql**: while autocommit is active (before a transaction),
+  issue `SET SESSION TRANSACTION READ ONLY` + `max_execution_time`,
+  then `START TRANSACTION` and execute via `SSCursor` (unbuffered).
+- Large results are cut off at the row cap by the server-side cursor
+  (never fully buffered client-side).
 
-#### 保証範囲の限定（pg / mysql）
+#### Assurance envelope limits (pg / mysql)
 
-- **保証範囲の変化**: sqlite の authorizer は「実行エンジン自身の判定」だったが、pg / mysql は
-  「DB 側 read-only role（第一防御）+ 静的 SQL 検査 + session read-only」の**組み合わせ**。
-  role を SELECT 専用にしないと防御が静的層 + session のみに縮む
-- **MySQL の一時テーブル穴**: MySQL の read-only transaction は**一時テーブルへの DML を許容する**。
-  この穴は session 層では塞げないため、`CREATE TEMPORARY TABLES` 権限を role に付与しないことで防ぐ
-  （上記 role 設定を守れば問題にならない）
-- **MariaDB は保証範囲外**: MySQLConnector は **MySQL** を対象にテストしている。MariaDB でも動く
-  可能性はあるが検証しない
+- **Envelope shift**: sqlite's authorizer is "engine self-judgment";
+  pg / mysql's guarantee is the **combination** of DB-side read-only
+  role (primary) + static SQL gate + session read-only. Without a
+  SELECT-only role, defense shrinks to static + session.
+- **MySQL temp-table hole**: MySQL read-only transactions **permit
+  DML on temporary tables.** This is not closable at the session
+  layer — close it on the role side by NOT granting
+  `CREATE TEMPORARY TABLES` (the role setup above handles this).
+- **MariaDB is out of scope**: MySQLConnector targets **MySQL**.
+  MariaDB may work, but it is not verified.
 
-### TLS（pg / mysql）
+### TLS (pg / mysql)
 
-- 既定は**安全側**: postgres は `sslmode=verify-full`、mysql は CA + hostname 検証
-- CA は `connection.tls_ca_file`（wiki_root 相対 or 絶対、symlink 全拒否。省略時はシステム CA）
-- 緩和は `connection.allow_insecure_tls: true` の明示 opt-in で、**host が localhost /
-  127.0.0.1 / ::1 の場合のみ**受理される（`tls_ca_file` との同時宣言は不可）
-- `doctor` は TLS ネゴシエーションの成立を確認し、緩和が宣言されている場合は SKIP（警告）表示する
+- Default is safe: postgres uses `sslmode=verify-full`; mysql uses
+  CA + hostname verification.
+- CA path: `connection.tls_ca_file` (wiki_root-relative or absolute;
+  full-segment symlink rejection; falls back to system CA when
+  omitted).
+- Relaxation requires explicit opt-in via
+  `connection.allow_insecure_tls: true` and is accepted **only when
+  the host is localhost / 127.0.0.1 / ::1** (cannot co-exist with
+  `tls_ca_file`).
+- `doctor` verifies TLS negotiation. If relaxation is declared, it
+  reports SKIP (warning).
 
-### http（Redash / Kibana(ES) / 社内 API）
+### http (Redash / Kibana(ES) / internal APIs)
 
-SQL の代わりに **request spec ファイル**（JSON）を `--request-file` / `--count-request` で渡す
-（`--sql-file` / `--count-sql` は SQL 系専用。http tool に SQL flag を渡すとエラーで案内される）:
+Pass a **request-spec file** (JSON) via `--request-file` /
+`--count-request` in place of SQL. `--sql-file` / `--count-sql` are
+SQL-only — passing an SQL flag to an http tool errors with guidance:
 
 ```json
 {
@@ -146,113 +182,169 @@ SQL の代わりに **request spec ファイル**（JSON）を `--request-file` 
 }
 ```
 
-- **request spec は JSON Schema で検証**（`{wiki_root}/schema/tool-request-spec-schema.json`、未知キー拒否）。
-  行取得は `records_path` + `columns`、ファネル COUNT は `count_path`（単一の非負整数）— 両者は排他
-- `records_path` / `count_path` は dot-path（`a.b.c`。配列 index・ワイルドカードなし）。各 record は
-  object（columns で射影）または配列（位置で射影）。型は None/int/float/str に正規化し、bool は int、
-  nested object の混入は型逸脱として拒否
-- **catalog（type: http）**: `base_url`（origin のみ。https 必須。http は localhost 限定の
-  `allow_insecure` opt-in）/ `allowed_endpoints`（method + path_prefix の allowlist）/
-  `auth_header_name` + `auth_header_template`（`{credential}` を秘密値で置換して注入）/
-  `limits.max_response_bytes`
-- **URL は canonicalize してから allowlist 照合**: encoded separator（`%2f` / `%5c` / `%2e%2e` /
-  NUL・control）は decode せず拒否、二重 / 不正 encoding は fail closed、`.` / `..` を解決、
-  `//` / backslash / 絶対 URL / userinfo / fragment を拒否。照合は origin 完全一致 +
-  **segment 境界の** path prefix（`/api/query` は `/api/query/42` に一致するが `/api/query-delete`
-  には一致しない）+ method 一致
-- **リダイレクトは拒否**（allowlist 迂回防止）。CLI 表示は中立な `request_digest`
-  （bundle 内部 field は Phase A 互換の `sql_digest` を維持）
+- **The request spec is validated against a JSON Schema**
+  (`{wiki_root}/schema/tool-request-spec-schema.json`, unknown keys
+  rejected). Row retrieval: `records_path` + `columns`. Funnel COUNT:
+  `count_path` (single non-negative integer). The two are mutually
+  exclusive.
+- `records_path` / `count_path` are dot-paths (`a.b.c`, no array
+  indices, no wildcards). Each record is either an object (projected
+  by `columns`) or an array (projected by position). Values are
+  normalized to None/int/float/str; booleans coerce to int; nested
+  objects are rejected as type violations.
+- **Catalog (`type: http`)**: `base_url` (origin only; https
+  required; http restricted to localhost with `allow_insecure`
+  opt-in) / `allowed_endpoints` (method + path_prefix allowlist) /
+  `auth_header_name` + `auth_header_template` (`{credential}`
+  substituted with the secret) / `limits.max_response_bytes`.
+- **URLs are canonicalized before allowlist match**: encoded
+  separators (`%2f` / `%5c` / `%2e%2e` / NUL / control) are NOT
+  decoded — they reject. Double or malformed encoding fails closed.
+  `.` / `..` are resolved. `//`, backslash, absolute URLs, userinfo,
+  and fragments reject. Matching is exact origin + **segment-boundary
+  path prefix** (`/api/query` matches `/api/query/42` but NOT
+  `/api/query-delete`) + method match.
+- **Redirects reject** (prevents allowlist bypass). CLI displays a
+  neutral `request_digest` (bundle-internal field stays
+  `sql_digest` for Phase A compatibility).
 
-#### 代表レスポンス例
+#### Representative responses
 
-- **Redash**: `POST /api/queries/{id}/results` → `records_path: "query_result.data.rows"`,
-  各行は `{"user_id": .., "email": ..}` の object
-- **Kibana (Elasticsearch) search**: `records_path: "hits.hits"`, `columns: ["_id", "_score"]`。
-  `_source`（object）を column に指定すると型逸脱として拒否される（nested 投影は保証範囲外）
-- **Elasticsearch count**: `count_path: "count"`（`_count` エンドポイントの応答）
+- **Redash**: `POST /api/queries/{id}/results` →
+  `records_path: "query_result.data.rows"`, each row is an object
+  `{"user_id": .., "email": ..}`.
+- **Kibana (Elasticsearch) search**:
+  `records_path: "hits.hits"`, `columns: ["_id", "_score"]`.
+  Specifying `_source` (an object) as a column rejects as a type
+  violation (nested projection is out of scope).
+- **Elasticsearch count**: `count_path: "count"` (from the `_count`
+  endpoint response).
 
-#### メモリモデルと max_response_bytes（保証範囲）
+#### Memory model and `max_response_bytes` (assurance envelope)
 
-- `Accept-Encoding: identity` を固定送信し圧縮転送を使わない（wire バイト = 実体サイズとなり
-  `max_response_bytes` の streaming 遮断が実効になる。サーバが圧縮を返したら Content-Encoding で拒否）
-- 読み込みは chunk 単位で `max_response_bytes` を検査し、超過時点で全量確保前に切断
-- **JSON parse 後は document 全体 + 正規化後 rows が同時にメモリへ載る**。これは設計上の保証範囲で、
-  `max_response_bytes` はメモリ予算に対して十分小さく（既定推奨 **8 MiB**）設定する。大きな結果が
-  必要なら「クエリ側で絞る」が正しい対処（本ツールの用途は要約・ファネルであり大量転送ではない）
-- **保証範囲外**: 非同期 job / polling（Redash の query 実行 job 等。one-shot JSON API のみ対応）、
-  streaming JSON parser、レスポンス DSL（ES / Redash のクエリ内容）の静的検証
+- Fixed `Accept-Encoding: identity` — compressed transfer is not
+  used (wire bytes == actual size, so `max_response_bytes`'s
+  streaming cutoff is real. If the server replies with an encoding,
+  reject via `Content-Encoding`).
+- Reading chunks and checking `max_response_bytes` — cut off before
+  the whole payload is held.
+- **After JSON parse, both the document AND normalized rows sit in
+  memory at the same time.** This is by design — keep
+  `max_response_bytes` small enough for the memory budget (default
+  recommendation: **8 MiB**). If large results are needed, "narrow
+  the query" is the correct fix (this tool is for summarization /
+  funnels, not bulk transfer).
+- **Out of scope**: async job / polling (Redash query-execution
+  jobs — one-shot JSON API only). Streaming JSON parsers. Static
+  inspection of the response DSL (ES / Redash query bodies).
 
-## doctor サブコマンド — 接続とリモート enforcement の事前診断
+## `doctor` subcommand — pre-flight for connections and remote enforcement
 
-リモート接続が入ると「実際に read-only role で繋がるか」を実行前に確かめたくなる。`doctor` は
-実データに触れず（COUNT すら実行しない）接続・read-only・delivery を診断する:
+Once remote connections are involved, you want to confirm "does the
+read-only role actually connect" before running anything. `doctor`
+diagnoses connection, read-only, and delivery without touching real
+data (does not even run COUNT):
 
 ```bash
-python3 skills/wiki/scripts/tool_query_run.py doctor --wiki-root .wiki [--tool <id>] [--probe-write <tool-id>]
+python3 skills/wiki/scripts/tool_query_run.py doctor \
+  --wiki-root .wiki [--tool <id>] [--probe-write <tool-id>]
 ```
 
-- 出力は固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`（`--format table|json`）
-- **read-only は独立 check に分解**される（同一接続では session と role を区別できないため）:
-  - `session_readonly` — 実クエリと同じ transaction 内の read-only 状態を introspection
-  - `role_grants` — pg: allowlist relation 全件で table-level INSERT/UPDATE/DELETE/TRUNCATE と
-    column-level INSERT/UPDATE が false /
-    mysql: `SHOW GRANTS` を parse し SELECT 以外の権限がないこと。**role 付与（MySQL 8 roles）や
-    解析できない grant 行がある場合は `role_grants_incomplete` の SKIP**（fail-open せず、
-    実効権限は `SHOW GRANTS ... USING` で確認が必要な旨を示す）
-  - `role_write_denial` — 通常実行では機械検証しない（**SKIP** 既定）
-  - `role_uninspected_privileges` — CREATE / TEMPORARY / EXECUTE 等は機械検証対象外（**SKIP** 明示）
-- その他: `credential_resolves` / `tls` / `connectivity` / http は `http_allowlist`（dry-run、実送信しない）/
-  `delivery_writable`（temp probe → 即削除）/ `audit`（doctor イベントの監査ログ書込可否。
-  書込失敗は `audit_write_failed` の NG として計上し、exit 0 で無言に流さない）
-- **exit code**: 0 = NG なし（SKIP は失敗扱いにしない） / 1 = NG あり / 2 = usage / 130 = 中断。
-  summary に SKIP 件数を必ず含め、必須 check に SKIP があれば未検証件数を明示する。
-  JSON は対象 check 名を `required_skips` に列挙する
-- **`--probe-write <tool-id>`（二重 opt-in）**: `connection.canary_relation` を宣言した tool に対してのみ、
-  canary への INSERT を試行し「拒否されること」を確認する。canary 未宣言なら probe 自体を拒否。
-  対象が未知 tool / postgres・mysql 以外 / `--tool` と不一致の場合は usage エラー（exit 2）。
-  拒否が **権限拒否（NOT_AUTHORIZED）** の場合のみ OK とし、接続断・timeout・relation 不在などの
-  「その他の失敗」は `probe_inconclusive` の NG（あらゆる失敗を書込拒否成功と誤認しない）。
-  本 connector は read-only session 専用のため、この probe は session read-only + role の**重畳**での
-  拒否を確認する（role 単独の書込拒否を session から分離しては検証しない — role 側の第一情報源は
-  `role_grants`）。MySQL の canary relation はトランザクショナルエンジン（InnoDB）必須であり、
-  非トランザクショナルエンジンでは rollback しても probe の書込が残り得る
-- **TLS check**: 接続成立をもって「verify-full / CA+hostname 検証つきの TLS ネゴシエーション成立」を
-  OK とする（緩和宣言時は SKIP、接続不能時も SKIP — 設定値だけで OK にしない）
+- Fixed columns: `tool / check / status(OK|NG|SKIP) / reason_code /
+  hint` (`--format table|json`).
+- **Read-only is decomposed into independent checks** (a single
+  connection cannot distinguish session from role):
+  - `session_readonly` — introspect read-only status inside the same
+    kind of transaction as the real query.
+  - `role_grants` — pg: verify that every allowlist relation has
+    table-level INSERT/UPDATE/DELETE/TRUNCATE and column-level
+    INSERT/UPDATE all `false`. mysql: parse `SHOW GRANTS` and
+    require nothing but SELECT. **If role grants (MySQL 8 roles) or
+    unparseable grant rows are involved, mark
+    `role_grants_incomplete` as SKIP** (do NOT fail-open) — real
+    permissions require `SHOW GRANTS ... USING` verification.
+  - `role_write_denial` — NOT mechanically verified on normal runs
+    (**SKIP** default).
+  - `role_uninspected_privileges` — CREATE / TEMPORARY / EXECUTE
+    etc. are out of mechanical verification (**SKIP** explicit).
+- Others: `credential_resolves` / `tls` / `connectivity`; for http,
+  `http_allowlist` (dry-run, no real send); `delivery_writable`
+  (temp probe → immediate delete); `audit` (whether the doctor
+  event can be written — a write failure counts as `audit_write_failed`
+  NG, not silently swallowed by exit 0).
+- **Exit codes**: 0 = no NG (SKIP does not fail) / 1 = any NG /
+  2 = usage / 130 = interrupted. The summary always includes the
+  SKIP count; if a required check is SKIP, it explicitly reports the
+  unverified count. JSON emits `required_skips` with the check
+  names.
+- **`--probe-write <tool-id>` (double opt-in)**: for tools that
+  declare `connection.canary_relation`, attempt an INSERT on the
+  canary and confirm it is rejected. If canary is not declared,
+  the probe rejects. Unknown tool / non-postgres-mysql /
+  `--tool` mismatch is a usage error (exit 2). Only a **permission
+  denied (NOT_AUTHORIZED)** rejection counts as OK — connection
+  drop, timeout, missing relation, and other failures classify as
+  `probe_inconclusive` NG (do NOT conflate any failure with
+  write-denial success). Because this connector uses read-only
+  sessions, the probe confirms rejection at the **overlay** of
+  session read-only + role (does not separate role-only write
+  rejection from the session — the primary information source for
+  the role side is `role_grants`). MySQL canary relations require
+  a transactional engine (InnoDB); non-transactional engines may
+  leave probe writes even after rollback.
+- **TLS check**: connection success indicates
+  "verify-full / CA+hostname-verified TLS negotiation succeeded".
+  When relaxation is declared, mark SKIP. When the connection
+  itself fails, also SKIP — do NOT mark OK just from configuration.
 
-## Selection Recipe の書き方
+## Writing Selection Recipes
 
-Recipe は「何をどう判断して取得するか」の説明層。`{wiki_root}/concepts/` に通常の記事として置く。
+Recipes are the explanation layer for "what to fetch and how to
+decide". Store as a regular article under `{wiki_root}/concepts/`.
 
-- **category**: `practices` / **tags**: `selection-recipe` + ドメインタグ
-- テンプレート: `skills/wiki/assets/selection-recipe-template.md`
-- **source_refs の埋め方（必須 — page-template.json は minItems: 1）**: Recipe の出典は
-  「初回実施時の依頼内容・判断メモ」。依頼の要約と裁定の経緯を
-  `{wiki_root}/raw/articles/{slug}.md` に immutable に保存し、そのパスを source_refs に
-  書く（wiki-ingest のテキスト取り込みと同じ手順）。既存の raw ソースに判断根拠が
-  ある場合はそれを指してもよい。空配列は lint（missing frontmatter / format violation）で
-  落ちる
-- 必ず書くこと:
-  - 対象定義（業務言葉で 1 行）と、それを SQL 条件に落とすときの判断（なぜこの条件で表現するか）
-  - **除外条件とその理由**（Why not — 「なぜ○○は含めないか」が Recipe の最重要情報）
-  - ファネル構成（どの順で条件を足すと承認者が検算しやすいか）
-  - tool_id と主要テーブル・key_columns
-  - 実施ログ（日付 / plan_id / 件数 / 依頼受領〜引き渡しの所要時間 / 気づき）
-- 書かないこと: 接続情報・上限値（catalog の写しは陳腐化する。tool_id で参照するだけにする）
+- **category**: `practices`. **tags**: `selection-recipe` + domain
+  tags.
+- Template: `skills/wiki/assets/selection-recipe-template.md`.
+- **How to populate `source_refs` (required — page-template.json has
+  `minItems: 1`)**: the Recipe's source is "the initial request +
+  the judgment notes at first execution." Save the request summary
+  and decision trail immutably at `{wiki_root}/raw/articles/{slug}.md`
+  and reference that path (same as text ingest with wiki-ingest). If
+  an existing raw source contains the rationale, reference that.
+  Empty arrays fail lint (missing frontmatter / format violation).
+- Must include:
+  - Target definition (one line, business language) plus the
+    judgment for mapping it into SQL conditions (why this condition
+    represents it).
+  - **Exclusion conditions and their rationale** (Why not — "why NOT
+    include X" is the Recipe's most important information).
+  - Funnel composition (what order of adding conditions the approver
+    can most easily cross-check).
+  - `tool_id`, primary tables, `key_columns`.
+  - Execution log (date / plan_id / row count / elapsed time
+    from request receipt to hand-off / observations).
+- Must NOT include: connection info, limits (catalog copies go stale
+  — reference by `tool_id` instead).
 
-### 昇格基準（いつ Recipe 記事にするか）
+### Promotion criteria (when to make a Recipe)
 
-1. **2 回目の同種依頼が来た時点で必ず作る**（1 回目はセッション内メモでよい）
-2. 1 回目でも、除外条件の判断に業務知識（例: 「テスト用アカウントは `email LIKE '%@example.com'` で除外」）
-   が必要だった場合は作る — その判断こそが外在化する価値のある資産
-3. 実行のたびに実施ログ節へ追記し、判断が変わったら本文を更新する（履歴は git が持つ）
+1. **Always create on the second request of the same kind** (an
+   in-session note is fine for the first).
+2. Even on the first, create it if the exclusion condition required
+   business knowledge (e.g. "exclude test accounts with
+   `email LIKE '%@example.com'`") — that judgment is exactly the
+   knowledge worth externalizing.
+3. Append to the execution-log section every run. When the judgment
+   changes, update the body (git carries the history).
 
-## サンプル catalog のセットアップ
+## Sample catalog setup
 
-`.wiki/tools/catalog.json` の `sample-events-db` は**形見本**であり、そのままでは
-実行できない（DB ファイルと delivery 先が存在しない）。試すには:
+`sample-events-db` in `.wiki/tools/catalog.json` is **for shape only** —
+it does not run as-is (the DB file and delivery destination do not
+exist). To try it:
 
 ```bash
-# 1. DB fixture を作る（catalog の connection.path に合わせる）
+# 1. Create the DB fixture (match catalog's connection.path)
 python3 - <<'EOF'
 import sqlite3, pathlib
 pathlib.Path(".wiki/data").mkdir(exist_ok=True)
@@ -265,22 +357,27 @@ CREATE TABLE IF NOT EXISTS refunds (user_id INTEGER, amount INTEGER);
 conn.commit(); conn.close()
 EOF
 
-# 2. delivery 先を作る（catalog の delivery.allowed_dirs に合わせる）
+# 2. Create the delivery destination (match catalog's delivery.allowed_dirs)
 mkdir -p .wiki/outputs/deliveries
 
-# 3. 検証
+# 3. Validate
 python3 skills/wiki/scripts/tool_query_run.py catalog-validate --wiki-root .wiki
 ```
 
-実データを扱う tool を登録する場合は、既存 DB への path（または base_dir）を宣言し、
-`allowed_tables` を必要最小限にして PR レビューを経る。
+For a real-data tool, declare the path to an existing DB (or a
+`base_dir`), keep `allowed_tables` minimal, and put it through PR
+review.
 
-## catalog の変更手順
+## Modifying the catalog
 
-catalog は git 管理の実行契約。変更（テーブル追加・上限緩和・delivery 先追加）は:
+The catalog is a git-managed execution contract. Any change (adding
+tables, relaxing limits, adding delivery destinations):
 
-1. `.wiki/tools/catalog.json` を編集
-2. `python3 skills/wiki/scripts/tool_query_run.py catalog-validate --wiki-root .wiki` で検証
-3. **通常の PR / commit レビューを経る**（Wiki 記事の編集では安全境界を変更できない、が設計原則）
+1. Edit `.wiki/tools/catalog.json`.
+2. Validate:
+   `python3 skills/wiki/scripts/tool_query_run.py catalog-validate --wiki-root .wiki`.
+3. **Go through normal PR / commit review** — a design principle is
+   that editing a wiki article cannot change the safety perimeter.
 
-catalog 変更後、既存の承認済み plan は `catalog_digest_mismatch` で実行不能になる（意図した挙動）。
+After a catalog change, existing approved plans reject with
+`catalog_digest_mismatch` (intended behavior).

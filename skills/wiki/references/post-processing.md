@@ -1,32 +1,39 @@
-# 共通後処理
+# Shared post-processing
 
-compile と query(promote) の両方で使用する後処理手順。
+Post-processing shared by `compile` and `query(promote)`.
 
-## Backlink Audit（必須）
+## Backlink Audit (required)
 
-記事生成後、既存の全記事を `grep` で走査し、新記事に言及すべき箇所を特定する。
-該当する既存記事に `[[new-slug]]` リンクと `related` フロントマターを追加し、その記事の `updated` フロントマターも実行日に更新する。
+After article generation, `grep` every existing article and identify
+places that should link to the new article. Add `[[new-slug]]` links
+and `related` frontmatter entries in the matching articles, and bump
+their `updated` frontmatter to today.
 
-このステップを skip すると Wiki が一方向リンクの blog に退化する。**必ず実行すること。**
+Skipping this step turns the wiki into a one-directional blog. **Do
+NOT skip.**
 
-## index / AGENTS.md 更新
+## Update index / AGENTS.md
 
-1. `{wiki_root}/index.md` に新記事を追加（カテゴリ別、1行サマリー）
-2. `AGENTS.md` の Articles セクションを更新
+1. Add the new article to `{wiki_root}/index.md` (categorized, one-line
+   summary).
+2. Update the Articles section of `AGENTS.md`.
 
-## wikilink rendering
+## Wikilink rendering
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/wikilink_render.py --write {wiki_root}/concepts/
 ```
 
-`[[slug]]` を GitHub Web UI で踏める `[[slug]] ([↗](slug.md))` 形式に併記する（idempotent）。
+Appends the GitHub-Web-UI-clickable form to each `[[slug]]`, producing
+`[[slug]] ([↗](slug.md))`. Idempotent.
 
-**注**: outputs/queries/ 内の `[[wikilink]]` には GitHub 併記は不要（wikilink_render の対象は `concepts/` のみ）。
+**Note**: `[[wikilink]]`s inside `outputs/queries/` do NOT need the
+GitHub companion (the render script targets `concepts/` only).
 
 ## log_append
 
-各操作に応じたサブコマンドで `log.md` に追記する（フォーマットはスクリプトが管理）:
+Append to `log.md` via the relevant subcommand (the script owns the
+format):
 
 ```bash
 # compile

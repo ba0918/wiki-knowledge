@@ -24,15 +24,16 @@ _ARTICLE_SLUGS = ("inquiry-event-point-missing", "inquiry-subscription-mismatch"
 _RAW_SOURCE = "raw/files/usersupport-inquiry-verification-idea.md"
 
 # Product/tool identifiers that must NOT appear in the norm body — they are
-# allowed only inside the isolated "本リポジトリでの一適用例" example section,
-# because the tool-independence of the norm is the top-priority arbitration.
+# allowed only inside the isolated "One application example in this repository"
+# example section, because the tool-independence of the norm is the top-priority
+# arbitration.
 _TOOL_TOKENS = ("tool-query", "browser-extract", "selection-recipe",
                 "tool_query", "browser_extract", "toolquery")
-_EXAMPLE_MARKER = "本リポジトリでの一適用例"
+_EXAMPLE_MARKER = "One application example in this repository"
 # Anchor on the H2 heading line, not the bare phrase — the norm body mentions
-# the phrase in prose ("末尾の「本リポジトリでの一適用例」節にのみ隔離する") before
-# the actual section, and matching that prose would shrink the inspected range
-# to a few hundred chars and silently disable the regression guard. The leading
+# the phrase in prose ("isolated to the ... section at the end") before the
+# actual section, and matching that prose would shrink the inspected range to a
+# few hundred chars and silently disable the regression guard. The leading
 # newline pins it to an exact H2 (a "### ..." line would otherwise match too).
 _EXAMPLE_HEADING = "\n## " + _EXAMPLE_MARKER
 
@@ -51,80 +52,84 @@ class TestInvestigationGuide:
 
     def test_three_layer_decomposition(self):
         body = self._guide()
-        for token in ("観測事実", "業務ルール適用", "バグ推定"):
-            assert token in body, f"3層判断分解の要素 '{token}' が欠落"
+        for token in ("Observation", "Business rule application", "Bug inference"):
+            assert token in body, f"three-layer decomposition element '{token}' missing"
 
     def test_five_split_report_format(self):
         body = self._guide()
-        for token in ("観測事実", "適用ルール", "推定原因", "確信度", "不足情報"):
-            assert token in body, f"5分割様式の要素 '{token}' が欠落"
+        for token in ("Observations", "Applied rules", "Inferred cause",
+                      "Confidence", "Missing information"):
+            assert token in body, f"five-section report element '{token}' missing"
 
     def test_sot_first_criterion(self):
         body = self._guide()
-        assert "Source of Truth" in body or "真実源" in body, "SoT 概念が欠落"
-        assert "証拠権威" in body, "経路優先順位の第一基準（証拠権威）が欠落"
-        assert "最小権限" in body, "tiebreaker（最小権限）が欠落"
+        assert "Source of Truth" in body, "SoT concept missing"
+        assert "evidence authority" in body.lower(), "primary criterion (evidence authority) missing"
+        assert "minimum privilege" in body.lower(), "tiebreaker (minimum privilege) missing"
 
     def test_settlement_window_gate(self):
         body = self._guide()
-        assert "settlement window" in body, "settlement window ゲートが欠落"
+        assert "settlement window" in body, "settlement window gate missing"
 
     def test_impossibility_taxonomy_six_categories(self):
         body = self._guide()
-        for token in ("権限不足", "照合キー欠落", "処理中・再照会待ち",
-                      "登録ツール経路なし", "SoT 間不一致", "retention"):
-            assert token in body, f"調査不能タクソノミの分類 '{token}' が欠落"
+        for token in ("Insufficient privilege", "Missing join key",
+                      "In-progress / re-check pending",
+                      "No registered tool route", "SoT mismatch", "retention"):
+            assert token in body, f"cannot-investigate taxonomy category '{token}' missing"
 
     def test_time_hazard_section(self):
         body = self._guide()
-        assert "event-time" in body and "processing-time" in body, "時刻種別区別が欠落"
-        assert "TZ" in body or "タイムゾーン" in body, "TZ 正規化が欠落"
+        assert "event-time" in body and "processing-time" in body, "time-kind distinction missing"
+        assert "TZ" in body or "time zone" in body, "TZ normalization missing"
 
     def test_two_log_separation(self):
         body = self._guide()
-        assert "QueryLog" in body, "記事参照ログ（QueryLog）が欠落"
-        assert "監査ログ" in body, "ツール実行ログ（監査ログ）が欠落"
+        assert "QueryLog" in body, "article reference log (QueryLog) missing"
+        assert "audit log" in body.lower(), "tool execution log (audit log) missing"
 
     def test_confidence_rubric_corroboration(self):
         body = self._guide()
-        assert "corroboration" in body or "裏取り" in body, "確信度ルーブリック（corroboration）が欠落"
+        assert "corroboration" in body, "confidence rubric (corroboration) missing"
 
     def test_closed_set_evolution_governance(self):
         body = self._guide()
-        assert "閉集合" in body, "閉集合の進化ガバナンスが欠落"
+        assert "closed set" in body.lower(), "closed-set evolution governance missing"
 
     def test_minimum_generality_bar(self):
         body = self._guide()
-        assert "最小一般性" in body, "匿名化の最小一般性バーが欠落"
+        assert "minimum-generality" in body.lower() or "minimum generality" in body.lower(), (
+            "minimum-generality bar for anonymization missing"
+        )
 
     def test_tool_independence_tokens_isolated_to_example_section(self):
         body = self._guide()
         assert body.count(_EXAMPLE_HEADING) == 1, (
-            f"例示節の見出し '## {_EXAMPLE_MARKER}' はちょうど 1 つ必要"
+            f"example-section heading '## {_EXAMPLE_MARKER}' must appear exactly once"
         )
         marker_idx = body.find(_EXAMPLE_HEADING)
         norm_body = body[:marker_idx].lower()
         leaked = [t for t in _TOOL_TOKENS if t in norm_body]
         assert not leaked, (
-            f"規範本体（例示節より前）にツール識別子が漏れている: {leaked}. "
-            "ツール名は '本リポジトリでの一適用例' 節にのみ置くこと"
+            f"tool identifier leaked into the norm body (before the example section): {leaked}. "
+            f"Tool names may only appear in the '{_EXAMPLE_MARKER}' section"
         )
 
     def test_example_section_is_isolated_at_document_end(self):
-        """例示節は末尾の隔離節 — その後に規範セクション（##）が続かない。"""
+        """Example section must be the last isolated section — no norm section (##) after it."""
         body = self._guide()
         after = body[body.find(_EXAMPLE_HEADING) + len(_EXAMPLE_HEADING):]
         assert not any(line.startswith("## ") for line in after.splitlines()), (
-            "例示節より後に規範セクションがある（隔離節は文書末尾に置くこと）"
+            "a norm section appears after the example section (the isolated section must be at document end)"
         )
 
     def test_example_section_mentions_local_tools(self):
-        """例示節は本リポジトリのツールへの言及を持つ（ツール非依存の突き詰めに
-        よる空疎化を防ぐ、という計画の裁定の機械化）。"""
+        """Example section must reference this repo's tools (defends against the 'tool-independence
+        pushed so far that the section becomes vacuous' arbitration)."""
         body = self._guide()
         example = body[body.find(_EXAMPLE_HEADING):].lower()
-        assert "tool-query" in example, "例示節に tool-query の適用例がない"
-        assert "browser-extract" in example, "例示節に browser-extract の適用例がない"
+        assert "tool-query" in example, "example section does not mention tool-query"
+        assert "browser-extract" in example, "example section does not mention browser-extract"
 
 
 class TestReportTemplate:

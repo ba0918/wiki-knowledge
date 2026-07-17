@@ -1,756 +1,976 @@
-# Browser Extract ガイド — 設計裁定・登録時壁打ち・tier 判定
+# Browser Extract Guide — Design Rulings, Registration Walkthrough, Tier Decision
 
-wiki-browser-extract 系統（browser-extract 別系統）の設計リファレンス兼裁定書。
-実行契約の真実源は git 管理の **catalog**（`{wiki_root}/tools/catalog.json` の
-`type: browser` エントリ、schema: `{wiki_root}/schema/browser-extract-catalog-schema.json`）
-と **固定フローコード**（`{wiki_root}/tools/flows/{tool_id}.py`、PR レビュー必須）。
-Wiki 記事（Selection Recipe）は説明層であり、自然言語編集ではこの安全境界を変更できない。
+Design reference and rulings document for the wiki-browser-extract line
+(browser-extract's parallel system). The execution contract's source of
+truth is the git-managed **catalog** (the `type: browser` entries in
+`{wiki_root}/tools/catalog.json`; schema:
+`{wiki_root}/schema/browser-extract-catalog-schema.json`) plus **fixed
+flow code** (`{wiki_root}/tools/flows/{tool_id}.py`, PR review
+required). Wiki articles (Selection Recipes) are the explanation
+layer — natural-language editing of an article cannot move this safety
+perimeter.
 
-このドキュメントは実装ステップ（Step 2〜7）が参照する「決まっていること」を固定する。
-Open Question を残さない — 曖昧なまま実装に入ると誤成功（正しく見えるが違うデータ）を招く。
-
----
-
-## 0. 最重要裁定 — seal-at-prepare の承認完全性（監査アンカー照合）
-
-refine フェーズで最後まで WARN が残った箇所。ここを最初に固定する。
-
-### 問題
-
-seal-at-prepare モデルでは、prepare が認証済みセッションで抽出を完了し、成果物 +
-manifest を隔離 bundle（spool = `outputs/browser-plans/{plan_id}/`）に封印する。
-approve は人間が TTY で成果物プレビューを見て承認する。**spool はエージェント可読
-かつ書込み可能なローカルファイル**であるため、prepare 後〜approve 前に spool 内の
-artifact / manifest / プレビューを整合的に書き換えると「人間が承認済みの搬出」を
-偽造できてしまう。
-
-### 裁定
-
-approve の TTY 表示は **prepare 時に保存されたプレビューファイルを一切信用しない**。
-表示時に以下を行う:
-
-1. **封印 artifact 本体からハッシュとプレビュー（先頭 N 行）を再計算**する
-2. 再導出ハッシュを **spool 外のアンカー = `prepared` 監査イベントに記録済みの封印
-   ハッシュと fail-closed 比較**する
-   - 照合スコープは **artifact ハッシュ + manifest ハッシュの両方**
-   - `prepared` 監査イベントに `artifact_digest`（result 本体の SHA-256）と
-     `manifest_digest`（manifest.json bytes の SHA-256）を記録する
-3. **不一致は「表示への反映」ではなく「拒否」**（exit 1、`readback_mismatch` 相当の
-   専用 reason `seal_mismatch`）
-   - manifest の中身（件数・anchor 照合結果）は prepare 時の live ページに対する
-     実行事実であり artifact からは再導出できない。その完全性を担保するのは
-     **この監査アンカー照合だけ**。したがって manifest 改変も「拒否」のみが合格実装。
-     偽造 anchor 結果を「検証済みの顔」で表示に反映する実装は**不合格**
-4. 一致した場合のみ表示し、`approved` 監査イベントにも pin したハッシュを記録する
-5. execute は承認レコード（state.json の `sealed_artifact_digest` /
-   `sealed_manifest_digest`）と `prepared` 監査アンカーの**両方**に照合してから
-   delivery を解放する
-
-これにより「prepare 後に artifact + manifest を整合的に書き換えて人間承認済み搬出を
-成立させる」経路を消す。
-
-### 受容する残余（既知の限界）
-
-監査 JSONL（`browser-audit.jsonl`）自体もエージェント可読環境にある。攻撃者が
-`prepared` イベントの digest も書き換えれば照合を通せる。本裁定は
-**「攻撃者は監査履歴も書き換えねばならない」まで bar を上げる**に留まる。これは既存
-tool-query family が受容済みの残余（監査ログの可書性）と同格であり、guide の
-「既知の限界」節に記載する。OS 層の append-only / 別ホスト集約は将来オプション。
-
-### 信頼境界の honest scoping（交換条件）
-
-SQL 系（approve-then-execute）と異なり、**seal-at-prepare の人間承認はデータアクセスを
-門番しない**。prepare は承認前に認証済みセッションで抽出を完了し、封印 bundle は
-エージェント可読なローカルファイルになる。approve が守るのは **delivery（マシン外への
-搬出）のみ**で、機密性境界は「そのマシン」に後退する。
-
-- 棄却代替: **二段階承認**（承認 → 抽出 → 再承認）= 摩擦倍増、かつ承認材料が実データに
-  ならない一段目は形骸化する
-- 棄却代替: **approve-then-execute**（SQL 系流用）= 承認材料が実抽出データにならず、
-  prepare→execute 間（最大 24h）にデータ・権限・UI・session が変わる TOCTOU が再発する
-- 採用理由: 承認対象 = 配布物の同一性をハッシュで固定することで「人間が見たものと
-  出て行くものが常にバイト同一」を保証する。B2 の「人手確認必須」も approve が
-  その確認点になり、確認前 publish が構造的に起きない
-
-安価なガード（seal-at-prepare の帰結を補強）:
-
-- `prepared` を **row_count 付きの第一級監査イベント**にする（未承認でも抽出事実が残る）
-- tool ごとの **未承認 bundle 数上限**（catalog `limits.max_unapproved_bundles`）を設け、
-  超過時は prepare を拒否する
-- 未承認 bundle も **TTL janitor の回収対象**に含める（放置された機密 spool を残さない）
-
-この裁定は tier 保証マトリクス（§5）と approve TTY 文言（§10）にも明示する。
+This document fixes "the decided points" that implementation steps
+(Step 2–7) reference. Do NOT leave Open Questions — entering
+implementation with ambiguity invites false-success (data that looks
+right but isn't).
 
 ---
 
-## 1. 系統分離の方針
+## 0. Most important ruling — seal-at-prepare's approval integrity (audit-anchor match)
 
-既存 tool-query に `type: browser` として統合**しない**。保証水準が異なる:
+The last WARN that remained through the refine phase. Fix this first.
 
-- SQL 系 = 静的検査 + DB role で **機械保証**
-- browser 系 = 封じ込め + 証跡（**強制ではなく honest scoping**）
+### Problem
 
-**catalog スキーマ規約と監査 JSONL 形式だけ共有する別系統**として実装する。
-共有可能な service 層（承認 bundle・single-use consume・TTL・delivery・パス封じ込め・
-credential 解決）は既存モジュールを import で再利用し、二重実装しない（§11 の再利用境界）。
+In the seal-at-prepare model, prepare completes extraction inside an
+authenticated session and seals artifacts + manifest into a
+containment bundle (spool = `outputs/browser-plans/{plan_id}/`).
+Approve is the human viewing a preview on a TTY. **The spool is an
+agent-readable AND writable local file**, so a coordinated
+post-prepare pre-approve rewrite of artifact / manifest / preview
+inside the spool could forge "an already human-approved delivery."
+
+### Ruling
+
+The approve TTY view **does NOT trust the preview file saved by
+prepare at all**. At display time:
+
+1. **Re-compute the hash and preview (first N rows) from the sealed
+   artifact itself**.
+2. Fail-closed compare the re-derived hash against the **anchor
+   outside the spool = the seal hash already recorded in the
+   `prepared` audit event**.
+   - Match scope: **both the artifact hash and the manifest hash**.
+   - The `prepared` audit event records `artifact_digest` (SHA-256 of
+     the result body) and `manifest_digest` (SHA-256 of `manifest.json`
+     bytes).
+3. **Mismatch is "reject," not "reflect in display"** (exit 1, with a
+   dedicated reason `seal_mismatch` — analogous to `readback_mismatch`).
+   - Manifest content (row count, anchor match results) records
+     execution against the live page at prepare time and cannot be
+     re-derived from the artifact. **This audit-anchor match is the
+     only thing guaranteeing its integrity.** So manifest tampering
+     also only passes as "reject." An implementation that reflects
+     forged anchor results into the display "with a verified face"
+     **fails**.
+4. Only display on match, and record the pinned hash in the `approved`
+   audit event as well.
+5. Execute matches the approval record (`sealed_artifact_digest` /
+   `sealed_manifest_digest` in `state.json`) **and** the `prepared`
+   audit anchor **both** before releasing delivery.
+
+This closes the "rewrite artifact + manifest consistently after prepare
+so a human-approved delivery is established" path.
+
+### Accepted residual (known limits)
+
+The audit JSONL (`browser-audit.jsonl`) itself is also in an
+agent-readable environment. If the attacker also rewrites the digest
+in the `prepared` event, the match passes. This ruling **raises the
+bar to "the attacker must also tamper with audit history"** and no
+further. This is on par with the residual accepted by tool-query
+family (audit log writability) — recorded in this guide's "Known
+limits" section. OS-layer append-only / off-host aggregation are
+future options.
+
+### Honest scoping of the trust boundary (trade-off)
+
+Unlike SQL systems (approve-then-execute), **seal-at-prepare's human
+approval does not gate data access**. Prepare completes extraction
+inside an authenticated session before approval, and the sealed
+bundle becomes an agent-readable local file. Approve only guards
+**delivery** (release off the machine); the confidentiality boundary
+retreats to "this machine."
+
+- Rejected alternative: **two-step approval** (approve → extract →
+  re-approve) — doubles friction, and the first-step approval
+  becomes ceremonial because it lacks real data.
+- Rejected alternative: **approve-then-execute** (borrowing the SQL
+  pattern) — approval material lacks real extracted data, and
+  TOCTOU during the prepare→execute gap (up to 24h) reappears as
+  data / permissions / UI / session drift.
+- Adopted because: fixing "approval subject = distribution artifact
+  identity" by hash guarantees "what the human saw is byte-identical
+  to what leaves." B2's "human verification required" also becomes
+  the approve confirmation point — pre-verification publish
+  structurally cannot happen.
+
+Cheap guards that reinforce the seal-at-prepare consequence:
+
+- Make `prepared` a **first-class audit event with `row_count`**
+  (extraction fact is recorded even without approval).
+- Add a per-tool **unapproved-bundle count cap**
+  (`catalog.limits.max_unapproved_bundles`) — prepare rejects when
+  exceeded.
+- Include unapproved bundles in **the TTL janitor's collection
+  scope** (no lingering sensitive spool).
+
+This ruling is also stated in the tier assurance matrix (§5) and the
+approve TTY text (§10).
 
 ---
 
-## 2. enforcement 機構の裁定 — なぜ制限 DSL でなく capability API + AST ゲートか
+## 1. System-separation stance
 
-### 保証水準の言明（honest scoping）
+Do **NOT** integrate as `type: browser` inside the existing tool-query.
+The assurance level differs:
 
-固定フローコードは in-process Python である。**Python に対する構造的封じ込めは達成不能**
-（`().__class__.__bases__[0].__subclasses__()` 等の言語機構は塞ぎ切れない）。したがって
-**悪意フローへの構造的境界は主張しない**。担保は次の3層による**事故防止とレビュー支援**:
+- SQL system = static gate + DB role → **mechanical guarantee**.
+- Browser system = containment + provenance → **NOT enforced**;
+  honest scoping.
 
-1. **catalog の SHA-256 pin**（不一致 = 実行拒否）
-   - catalog の browser エントリは `flow.sha256` でフローファイルの内容ハッシュを宣言する
-   - runner はロード時にフローファイルを読み、ハッシュ照合する。不一致は `flow_pin_mismatch`
-     で実行拒否。「未追跡コード拒否」はこの hash 不一致の言い換えであり、**実行時に git を
-     照会しない**（git 非依存。ハッシュだけが真実源）
-2. **ロード時 AST 静的ゲート**（§3 で許可文法を定義）
-   - `import` / `from import` 文、`exec` / `eval` 呼び出し、dunder 属性アクセス
-     （`__globals__` 等）を拒否する
-3. **PR レビュー**（フロー・検証契約の変更は必ず人間レビューを経る）
-
-### 棄却した代替
-
-- **record/replay**: 記録した操作列を再生する方式。動的 DOM（loading・virtualized）で
-  脆く、パラメータ注入の型付けができず、誤成功検出の語彙を持てない
-- **制限 DSL**（独自のフロー記述言語）: 表現力と実装コストのトレードオフが最悪。
-  pagination / 条件分岐のような実ツールで必要な制御を DSL に足すたびに DSL 自体が
-  第2のプログラミング言語に肥大化し、その parser/evaluator が新たな攻撃面になる。
-  Python の AST ゲートで許可文法を絞る方が、既存の型システム・locator API を再利用でき、
-  レビュー可能性も高い
-- **flow 同居 assertion callback**（フロー内に検証ロジックを書かせる）: フローと検証を
-  同一 LLM が書くと同じ誤解を両方に埋め込む（§共通原因故障）。検証は閉じた語彙 + 別主体
-  レビューに分離する
-
-### 結論
-
-**フロー = capability API（型付き操作面）に対してのみ書く / 検証 = 閉じた語彙**。
-フローは raw Playwright を触らない。capability 集合と検証語彙の追加は、いずれも検証語彙と
-同じ PR 運用（connector 追加と同格）。
+Implement as a **parallel system that shares only the catalog schema
+convention and the audit JSONL format**. Reuse shared service layers
+(approval bundle, single-use consume, TTL, delivery, path
+containment, credential resolution) as imports of the existing
+modules — do NOT re-implement (see §11 for reuse boundaries).
 
 ---
 
-## 3. capability API v1（閉集合）と AST 許可ノード集合
+## 2. Enforcement mechanism — why capability API + AST gate instead of a restricted DSL
 
-### capability API v1（`browser_flow_runner.FlowContext` が提供）
+### Assurance statement (honest scoping)
 
-フローは `def run(ctx, params)` の単一関数として書く。`ctx` は以下の型付きメソッドのみを持つ:
+Fixed flow code is in-process Python. **Structural containment of
+Python cannot be achieved**
+(`().__class__.__bases__[0].__subclasses__()` etc. — language
+mechanisms cannot be closed off). Therefore **do NOT claim a
+structural boundary against malicious flows.** Assurance rests on
+three layers of **accident prevention and review support**:
 
-| capability | 意味 | origin/param の扱い |
+1. **Catalog SHA-256 pin** (mismatch = execution rejected).
+   - The browser catalog entry declares the flow file's content hash
+     in `flow.sha256`.
+   - At load time, the runner reads the flow file and matches the
+     hash. Mismatch rejects as `flow_pin_mismatch`. "Reject
+     untracked code" is a rephrasing of this hash mismatch —
+     **git is NOT queried at run time** (git-independent; the hash
+     is the sole source of truth).
+2. **Load-time AST static gate** (allowed grammar defined in §3).
+   - Reject `import` / `from import` statements, `exec` / `eval`
+     calls, and dunder attribute access (`__globals__` etc.).
+3. **PR review** (any change to flows / verification contract must
+   go through human review).
+
+### Rejected alternatives
+
+- **record/replay**: replay a recorded operation sequence. Brittle
+  under dynamic DOM (loading, virtualized); cannot type parameter
+  injection; cannot own a false-success detection vocabulary.
+- **Restricted DSL** (a custom flow-description language): worst
+  expressiveness vs implementation-cost trade-off. Every time real
+  tools need control (pagination, conditional branching), the DSL
+  itself bloats into a second programming language whose
+  parser/evaluator becomes a new attack surface. Narrowing the
+  allowed grammar with Python's AST gate reuses the existing type
+  system and locator API, and is more reviewable.
+- **In-flow assertion callback** (writing verification logic inside
+  the flow): flow + verification written by the same LLM embeds the
+  same misunderstanding in both (common-cause failure).
+  Verification is separated as a closed vocabulary + independent
+  reviewer.
+
+### Conclusion
+
+**Flow = written only against the capability API (typed operation
+surface) / Verification = closed vocabulary.** Flows do not touch
+raw Playwright. Additions to the capability set or the verification
+vocabulary both go through the same PR discipline (on par with
+adding a connector).
+
+---
+
+## 3. Capability API v1 (closed set) and AST allowed-node set
+
+### Capability API v1 (provided by `browser_flow_runner.FlowContext`)
+
+Flow is written as a single function `def run(ctx, params)`. `ctx` has
+only these typed methods:
+
+| capability | Meaning | Origin / param handling |
 |---|---|---|
-| `ctx.goto(route_id, **path_params)` | catalog 宣言の named route へ遷移 | origin は常に catalog、path_params は canonicalize して埋め込む。`page.goto(param)` 直結は不可 |
-| `ctx.get_by_role(role, name=None, exact=False)` | role + accessible name で locator 取得 | name は値バインディング（文字列補間なし） |
-| `ctx.get_by_label(text)` / `ctx.get_by_text(text)` | ラベル / テキストで locator 取得 | 同上 |
-| `ctx.fill(locator, value)` | 入力欄に値を入れる | value は params 由来の検証済み値 |
-| `ctx.click(locator, *, role, name)` | click。role + accessible name の複合条件を必須引数にする | セレクタ単独 click は不可（§7 破壊的操作抑止） |
-| `ctx.wait_stable(predicate)` | stability predicate（§4）が満たされるまで待つ | 素の sleep は提供しない |
-| `ctx.read_text(locator)` | locator のテキストを読む（readback 用） | 抽出値は未信頼バイト |
-| `ctx.download(trigger_locator, *, role, name)` | click → download を捕捉。runner 生成ランダム名で保存 | サーバー指定 filename は使わない（§retention） |
-| `ctx.expect_row_count(locator)` | 行数を数える（row_count_range 用） | — |
+| `ctx.goto(route_id, **path_params)` | Navigate to a catalog-declared named route | Origin always from catalog. `path_params` canonicalized before embedding. Direct `page.goto(param)` is not allowed |
+| `ctx.get_by_role(role, name=None, exact=False)` | Get a locator by role + accessible name | `name` uses value binding (no string interpolation) |
+| `ctx.get_by_label(text)` / `ctx.get_by_text(text)` | Get a locator by label / text | Same |
+| `ctx.fill(locator, value)` | Fill an input | `value` is a validated params-derived value |
+| `ctx.click(locator, *, role, name)` | Click. `role + accessible name` are required kwargs | Selector-only click is not allowed (§7 destructive-op suppression) |
+| `ctx.wait_stable(predicate)` | Wait until a stability predicate (§4) is satisfied | No raw `sleep` |
+| `ctx.read_text(locator)` | Read the locator's text (for readback) | Extracted bytes are untrusted |
+| `ctx.download(trigger_locator, *, role, name)` | Capture a click → download. Saved with a runner-generated random name | Server-supplied `filename` is not used (§retention) |
+| `ctx.expect_row_count(locator)` | Count rows (for `row_count_range`) | — |
 
-capability は v1 の閉集合。追加は PR 運用。フローは制御フロー（`if` / `for`）を書けるが、
-反復（pagination 等）は capability プリミティブ側（`ctx.paginate(...)` を将来追加）に
-寄せる方針とし、v1 では単純 `for` を許可する（§AST）。
+Capabilities are a closed set in v1. Additions go through PR. Flows
+can write control flow (`if` / `for`); repetition (pagination, etc.)
+is intended to shift to capability primitives
+(`ctx.paginate(...)` planned). v1 permits simple `for` (§AST).
 
-### AST 許可ノード集合（`browser_flow_runner` のロード時ゲート）
+### AST allowed-node set (`browser_flow_runner` load-time gate)
 
-フローファイルをロードする前に `ast.parse` して、**許可リスト方式**でノードを検査する。
-許可外ノードが1つでもあれば `flow_ast_violation` で拒否（ロード時、ブラウザ非依存）。
+Before loading a flow file, `ast.parse` it and inspect the nodes with
+an **allowlist scheme**. Any node outside the list rejects the file
+with `flow_ast_violation` (at load time, browser-independent).
 
-**許可するノード**（このリストと `_ALLOWED_AST_NODES` を同期させ、テストで機械検証する）:
+**Allowed nodes** (this list is synced with `_ALLOWED_AST_NODES` and
+mechanically verified in tests):
 
-- モジュール構造: `Module`、単一の `FunctionDef`（名前 `run`、引数 `ctx, params`）
-- 文: `Assign`、`AnnAssign`、`AugAssign`、`Expr`、`Return`、`Pass`、
-  `If`、`For`、`While`、`Break`、`Continue`、`With`（`ctx` の context manager 用）
-- 式: `Call`、`Attribute`（ただし dunder 名は拒否）、`Name`、`Constant`、
-  `Compare`、`BoolOp`、`UnaryOp`、`BinOp`、`Subscript`、`Index`、
-  `List`、`Tuple`、`Dict`、`Set`、`keyword`、`Starred`、`Slice`、
-  各種比較 / 演算子ノード、`comprehension`（内包表記）
-- 引数系: `arguments`、`arg`、`Load`/`Store`/`Del` context
+- Module structure: `Module`, a single `FunctionDef` (named `run`,
+  args `ctx, params`).
+- Statements: `Assign`, `AnnAssign`, `AugAssign`, `Expr`, `Return`,
+  `Pass`, `If`, `For`, `While`, `Break`, `Continue`, `With` (for
+  `ctx`'s context manager).
+- Expressions: `Call`, `Attribute` (dunder names rejected), `Name`,
+  `Constant`, `Compare`, `BoolOp`, `UnaryOp`, `BinOp`, `Subscript`,
+  `Index`, `List`, `Tuple`, `Dict`, `Set`, `keyword`, `Starred`,
+  `Slice`, comparison / operator nodes, `comprehension`.
+- Argument nodes: `arguments`, `arg`, `Load`/`Store`/`Del` context.
 
-**明示的に拒否するノード**（除外を negative test と対にする）:
+**Explicitly rejected nodes** (paired with negative tests):
 
-- `Import` / `ImportFrom`（モジュール取り込み全面禁止 — capability は引数の `ctx` 経由のみ）
-- `FunctionDef` の入れ子 / `Lambda` / `AsyncFunctionDef`（フローは単一 `run` のみ）
-- `ClassDef`
-- `Global` / `Nonlocal`
-- `Attribute` のうち属性名が `__` で始まり `__` で終わる dunder（`__globals__` /
-  `__class__` / `__subclasses__` 等の言語機構アクセス）
-- `exec` / `eval` / `compile` / `__import__` / `open` / `getattr` / `setattr` への
-  `Call`（名前ベースの callee 拒否リスト）
+- `Import` / `ImportFrom` (blanket module-import ban — capabilities
+  only through the argument `ctx`).
+- Nested `FunctionDef` / `Lambda` / `AsyncFunctionDef` (flow is a
+  single `run` only).
+- `ClassDef`.
+- `Global` / `Nonlocal`.
+- `Attribute` where the name starts and ends with `__` (dunders —
+  `__globals__` / `__class__` / `__subclasses__` etc.).
+- `Call` targeting `exec` / `eval` / `compile` / `__import__` /
+  `open` / `getattr` / `setattr` (name-based callee reject list).
 
-AST ゲートは「悪意コードを完全に防ぐ」ものではない（honest scoping）。dunder 拒否と
-import 拒否で**明白な脱出経路と事故**を塞ぎ、レビューを支援する層である。
+The AST gate is NOT "complete prevention of malicious code" (honest
+scoping). Dunder rejection and import rejection close **obvious
+escape routes and accidents**, and support review.
 
 ---
 
-## 4. 検証語彙 v1（閉集合）
+## 4. Verification vocabulary v1 (closed set)
 
-決め打ち不可能なのは**組み合わせ**であって語彙ではない。語彙に無い検証はエンジンへの
-PR で追加（= connector 追加と同じ運用）。未知語彙は catalog-validate で **fail-closed 拒否**。
+What can't be predetermined is the **combination**, not the
+vocabulary. Verification outside the vocabulary is added by engine
+PR (= same discipline as adding a connector). Unknown vocabulary
+**fail-closed rejects** at catalog-validate.
 
-### 正しさ（誤成功検出）
+### Correctness (false-success detection)
 
-| check | 意味 | 役割 |
+| check | Meaning | Role |
 |---|---|---|
-| `filter_readback` | UI 上のフィルタ表示（期間・条件）を読み戻し、params と一致するか照合 | フィルタ未反映の誤成功を検出 |
-| `row_count_range` | 抽出行数が期待レンジ内か（`{min, max}`） | 部分取得・pagination 欠落を検出 |
-| `selector_exists` | 指定 locator が実在するか（doctor smoke でも使う） | UI ドリフトを検出 |
+| `filter_readback` | Read back the UI's filter display (period, conditions) and match it against `params` | Detects filter-not-applied false success |
+| `row_count_range` | Extracted row count within the expected range (`{min, max}`) | Detects partial fetch / dropped pagination |
+| `selector_exists` | The declared locator actually exists (also used by doctor smoke) | Detects UI drift |
 
-### 独立 anchor（B1 の必須要件、§5）
+### Independent anchors (required for B1, §5)
 
-セレクタと同一の DOM 解釈に依存しない独立 oracle。以下のいずれかを1つ以上:
+Independent oracles that don't depend on the same DOM interpretation
+as the selectors. At least one of:
 
-| check | 意味 |
+| check | Meaning |
 |---|---|
-| `export_metadata_match` | export ファイル内メタデータ（生成期間・filter）と params の照合 |
-| `ui_total_vs_file_rows` | UI に表示された total 件数と export ファイルの行数の照合 |
-| `tenant_id_match` | 抽出データ内の tenant / account ID が catalog 宣言の account と一致 |
-| `primary_key_unique` | 主キー列に重複がない（部分結合・二重取得の検出） |
+| `export_metadata_match` | Metadata inside the export file (generated period, filter) matches params |
+| `ui_total_vs_file_rows` | Total-count displayed in UI matches the export file's row count |
+| `tenant_id_match` | Tenant / account ID in extracted data matches the catalog-declared account |
+| `primary_key_unique` | No duplicates on the primary key (detects partial joins, double fetch) |
 
-### 完全性（改ざん検出）
+### Completeness (tamper detection)
 
-| check | 意味 |
+| check | Meaning |
 |---|---|
-| `artifact_hash` | bundle→delivery 間の artifact 改ざん検出。**動的データに既知の基準ハッシュは存在しない**ため、セレクタずれの検出は担わない（完全性のみ） |
+| `artifact_hash` | Tamper detection between bundle and delivery. **No known baseline hash exists for dynamic data**, so this does NOT catch selector drift (completeness only) |
 
-### identity（画面同一性）
+### Identity (screen sameness)
 
-| check | 意味 |
+| check | Meaning |
 |---|---|
-| `screen_fingerprint` | Playwright の accessibility / DOM snapshot ベースの指紋。別 tenant の同型画面を検出。**bespoke なピクセルハッシュは採らない**（描画差分で偽陽性が出る） |
+| `screen_fingerprint` | Fingerprint based on Playwright's accessibility / DOM snapshot. Detects same-shape screens on a different tenant. **Bespoke pixel hashes are NOT adopted** (rendering variance produces false positives) |
 
-### 安定化語彙（stability predicate — 非決定的 DOM 対策）
+### Stability vocabulary (stability predicates — anti-DOM-nondeterminism)
 
-「決定的」なのは判定規則であって DOM ではない。loading 中・旧 DOM・virtualized table を
-正常と誤認しないよう、以下を `ctx.wait_stable(...)` の predicate として提供する。
-**素の sleep は禁止**:
+"Deterministic" describes the decision rule, not the DOM. To avoid
+mistaking loading, stale DOM, or virtualized tables for normal
+state, provide these as `ctx.wait_stable(...)` predicates. **Raw
+`sleep` is banned**:
 
-| predicate | 意味 |
+| predicate | Meaning |
 |---|---|
-| `navigation_settled` | navigation 完了（`networkidle` 相当 + URL 確定） |
-| `loading_indicator_gone` | 指定 loading indicator locator が消滅 |
-| `readback_stable` | 指定 locator のテキストが N 回連続一致（値の揺れ収束） |
-| `row_count_settled` | 行数が一定ウィンドウ内で不変 |
+| `navigation_settled` | Navigation complete (`networkidle`-equivalent + URL settled) |
+| `loading_indicator_gone` | The declared loading-indicator locator disappears |
+| `readback_stable` | The declared locator's text matches N times consecutively (value settles) |
+| `row_count_settled` | Row count stays fixed within a window |
 
-locale / timezone / viewport は context 生成時に固定する（§7）。
+Locale / timezone / viewport are fixed at context creation (§7).
 
-### 語彙の役割分担（まとめ）
+### Vocabulary responsibility summary
 
-- `filter_readback` / `row_count_range` + 独立 anchor = **正しさ**（誤成功検出）
-- `artifact_hash` = **完全性**（改ざん検出。正しさは担わない）
-- `screen_fingerprint` = **identity**（別画面検出）
+- `filter_readback` / `row_count_range` + independent anchors =
+  **correctness** (false-success detection).
+- `artifact_hash` = **completeness** (tamper detection — NOT
+  correctness).
+- `screen_fingerprint` = **identity** (different-screen detection).
 
 ---
 
-## 5. tier 分類と保証マトリクス
+## 5. Tier classification and assurance matrix
 
-「B1 = 高保証」の単一ラベルは使わない。tier ごとに保証有無を **機械可読マトリクス**で
-schema に持たせ、manifest・監査にも未保証事項を出力する。
+Do NOT use the single label "B1 = high assurance." Carry per-tier
+assurance in a **machine-readable matrix** in the schema; the
+manifest and audit output unguaranteed items too.
 
-| tier | 定義 | integrity | identity | filter correctness | completeness | human verification |
+| tier | Definition | integrity | identity | filter correctness | completeness | human verification |
 |---|---|---|---|---|---|---|
-| **B1** | TSV/CSV export あり + 独立 anchor 1つ以上 | ○ (artifact_hash) | ○ (screen_fingerprint) | ○ (filter_readback) | ○ (row_count_range + anchor) | approve |
-| **B2** | DOM 抽出（完全性保証なし） | △ | ○ | ○ | ✗（silent truncation 検出のみ、保証なし・人手確認必須） | approve（必須の確認点） |
-| **B3** | OCR | — | — | — | — | v1 対象外（tier 定義のみ） |
+| **B1** | TSV/CSV export + at least one independent anchor | ○ (artifact_hash) | ○ (screen_fingerprint) | ○ (filter_readback) | ○ (row_count_range + anchor) | approve |
+| **B2** | DOM extraction (no completeness guarantee) | △ | ○ | ○ | ✗ (silent-truncation detection only; NOT guaranteed; human verification required) | approve (required confirmation point) |
+| **B3** | OCR | — | — | — | — | Out of v1 scope (tier definition only) |
 
-- **B1 の必須要件**: 独立 anchor（`export_metadata_match` / `ui_total_vs_file_rows` /
-  `tenant_id_match` / `primary_key_unique` 等）を検証契約に**最低1つ**含むこと。
-  独立 oracle を構成できないツールは B1 を名乗れない（B2 に降格）。この要件は
-  catalog-validate で機械強制する（Step 4）
-- **専用最小権限アカウントは B1/B2 登録の前提条件**（Open Question ではない）— 不要な
-  書込み権限を持たないアカウントで登録する
-- **http 還元ゲートを先に必須で通す**（§14）
+- **B1 required condition**: the verification contract must include
+  **at least one** independent anchor (`export_metadata_match` /
+  `ui_total_vs_file_rows` / `tenant_id_match` /
+  `primary_key_unique` etc.). Tools that cannot form an independent
+  oracle cannot claim B1 (fall back to B2). This is mechanically
+  enforced by catalog-validate (Step 4).
+- **A dedicated minimum-privilege account is a precondition for
+  B1/B2 registration** (not an Open Question) — register with an
+  account that does NOT hold unnecessary write permissions.
+- **Pass the HTTP reduction gate first** (§14).
 
 ---
 
-## 6. auth profile と session state 束縛
+## 6. Auth profile and session-state binding
 
-| profile | 意味 | secret |
+| profile | Meaning | Secret |
 |---|---|---|
-| `none` | 認証不要 | — |
-| `form` | フォームログイン | credentials.json |
-| `form+totp` | フォーム + TOTP | credentials.json（TOTP secret） |
-| `human-assisted` | 人間ログイン → session state 引き継ぎ | `login` サブコマンドで捕捉 |
+| `none` | No authentication | — |
+| `form` | Form login | `credentials.json` |
+| `form+totp` | Form + TOTP | `credentials.json` (TOTP secret) |
+| `human-assisted` | Human login → hand off session state | Captured by the `login` subcommand |
 
-### form / form+totp の自動フォームログイン設定（catalog `auth`）
+### Form / form+totp auto-login configuration (catalog `auth`)
 
-form / form+totp は prepare の session 解決時に自動フォームログインする。catalog `auth` に
-以下を宣言する（値バインディングのセレクタのみ。文字列補間しない）:
+For `form` / `form+totp`, prepare auto-form-logs-in when resolving
+the session. Declare these under catalog `auth` (value-binding
+selectors only — no string interpolation):
 
-- `username`: ログイン識別子（**非秘密**。catalog field）
-- `credential_ref`: password を解決する ref（`.local/credentials.json`）
-- `totp_credential_ref`: TOTP secret（base32）を解決する ref（form+totp のみ必須）
-- `login`: `{route, username_label, password_label, submit_role, submit_name,
-  success_url_contains}`（+ form+totp は `totp_label`）。完了検知は post-login URL
-  （`success_url_contains`）— 遷移しなければ timeout → `session_expired`（wrong creds の検出線）
+- `username`: login identifier (**non-secret** — catalog field).
+- `credential_ref`: ref that resolves the password
+  (`.local/credentials.json`).
+- `totp_credential_ref`: ref that resolves the TOTP secret (base32,
+  required for `form+totp`).
+- `login`: `{route, username_label, password_label, submit_role,
+  submit_name, success_url_contains}` (+ `totp_label` for
+  `form+totp`). Completion is detected via post-login URL
+  (`success_url_contains`) — no transition → timeout →
+  `session_expired` (the wrong-creds detection line).
 
-session 解決の順序（`browser_extract_run._resolve_session_state`）: profile=none → session なし /
-form 系 → session store に有効な束縛 session があれば再利用、無ければ headless form login で捕捉
-して 0600 保存し再利用 / human-assisted → store 必須（無ければ `login` サブコマンドを hint）。
-TOTP は RFC 6238（`browser_login.totp_code`、stdlib hmac が真実源。fixture も re-export）。
+Session resolution order
+(`browser_extract_run._resolve_session_state`): profile=none → no
+session / form family → reuse valid bound session if present;
+otherwise headless form login captures, saves at 0600, and reuses /
+human-assisted → store required (else hint `login` subcommand).
+TOTP is RFC 6238 (`browser_login.totp_code`, stdlib `hmac` is the
+source of truth; fixture re-exports).
 
-### doctor の chromium 疎通（`BROWSER_EXTRACT_SMOKE` 時）
+### Doctor's Chromium probe (under `BROWSER_EXTRACT_SMOKE`)
 
-doctor は browser 非依存の検査（catalog resolve / flow pin / AST / params_schema）に加え、
-smoke 時のみ実 chromium で `login_reachability`（login route への遷移到達）と
-`selector_exists`（login フォームの username/password/submit の実在）を OK/NG 判定する。
-抽出・成果物生成はしない（データ非接触は主張しない honest scoping、§16）。
+Doctor runs browser-independent checks (catalog resolve / flow pin /
+AST / `params_schema`), and under smoke, additionally does OK/NG
+judgment on real Chromium: `login_reachability` (reachability of the
+login route) and `selector_exists` (existence of the login form's
+username / password / submit). It does NOT extract or produce
+artifacts. Data non-contact is NOT claimed (honest scoping, §16).
 
-- session state は credential と同格の封じ込め（0600・TTL・再認証ポリシー）
-- **tool / origin / account に束縛**する: state ファイルに束縛メタデータ
-  （`tool_id` / `origin` / `account`）を持たせ、実行時に catalog 宣言と照合する。
-  汎用ブラウザ profile の持込み・profile の tool 間共有は**禁止**（束縛不一致は
-  `session_binding_mismatch` で拒否）
-- 書込みは 0600 atomic（O_NOFOLLOW / umask）。Playwright デフォルト（0644 平文 JSON）で
-  書かせない
+- Session state is at credential-grade containment (0600, TTL,
+  re-auth policy).
+- **Bound to (tool, origin, account)**: the state file carries
+  binding metadata (`tool_id` / `origin` / `account`) and is matched
+  against catalog declarations at run time. Bringing in generic
+  browser profiles or sharing profiles across tools is **banned**
+  (binding mismatch rejects as `session_binding_mismatch`).
+- Writes are 0600 atomic (O_NOFOLLOW / umask). Do NOT let Playwright
+  write its default (0644 plain-text JSON).
 
-### login 実行時の allowlist 面（裁定）
+### Login-time allowlist surface (ruling)
 
-SSO / IdP / captcha / CDN を跨ぐ実サイトのログインは method + path 粒度の allowlist では
-壊れる（IdP の origin は事前に列挙し切れない）。裁定: **auth profile 側で catalog 明示の
-宣言拡張を許す** — `auth.login_origins`（ログイン中のみ有効な追加 origin allowlist）を
-schema 概念として持たせる。抽出フェーズの allowlist（`origin_allowlist`）とは分離し、
-`login` サブコマンドと `form` login 手続き中のみ `login_origins` を併用する。
-v1 のローカル fixture では顕在化しないが、schema には先に持たせる（Step 3）。
-
----
-
-## 7. 封じ込めモデル（interception の具体仕様）
-
-「宣言外通信ブロック」は `page.route()` の素朴適用では成立しない。以下を実装仕様として固定:
-
-- **第一防御はフローコード規約**: navigation の origin は常に catalog 宣言（named route）
-  から構成し、パラメータは検証済み path / 値のみを供給する。`ctx.goto(param)` の
-  param→origin 直結は capability API が構造的に禁止。**interception は第二防御線**
-- **interception は context スコープ**: `context.route('**/*', ...)`（page スコープでは
-  popup / 新規タブを取り逃がす）。全リクエストを catalog allowlist と照合、宣言外は
-  abort + 監査記録（`origin_blocked`）
-- **allowlist の粒度**: origin 単位でなく **method + path prefix + resource type** まで
-  狭める。照合前に URL を正規化（userinfo 拒否・IDN/punycode 正規化・末尾ドット除去・
-  port 明示化・encoded separator 拒否）。canonicalize は http connector の
-  `_canonicalize_segments` / origin 正規化の流儀を流用
-- **同一 origin 内の破壊的操作の抑止**: 状態変更系リクエスト（POST 等）は login / TOTP /
-  export job 作成など catalog に明示宣言されたものだけ許可。click 対象は role +
-  accessible name の複合条件で確認（`ctx.click` の必須引数）。加えて専用アカウントから
-  書込み権限を剥がすのが第一防御
-- **service worker は無効化**: context 生成時 `service_workers='block'`
-- **WebSocket は deny-by-default**: `route_web_socket` で全 WS 拒否（v1 対象ツールに
-  WS 必須のものは入れない）
-- **redirect は各ホップを再検証**: リダイレクト先 URL も origin allowlist で照合、宣言外は
-  abort（全面拒否は非現実的なため hop 単位の再検証）
-- **`data:` / `blob:` への navigation は拒否**（ネットワークリクエストを発生させず
-  interception が発火しないため）
-- **WebRTC は launch args で無効化**: `--webrtc-ip-handling-policy=disable_non_proxied_udp`
-  等。塞ぎ切れない残余は DNS rebinding と同格の既知の限界（§既知の限界）
-- **launch profile の隔離**: headless + 実行ごとの ephemeral user-data-dir + remote
-  debugging port なし + 実行ごとの fresh context。唯一の例外は `login` サブコマンド
-  （headed だが抽出・delivery は構造的に不可能）
-- **context 固定**: locale / timezone / viewport を context 生成時に固定（DOM 非決定性の
-  抑制）
+Real-site logins that cross SSO / IdP / captcha / CDN break under a
+method + path-granularity allowlist (IdP origins cannot be enumerated
+in advance). Ruling: **auth profile may declaratively extend the
+allowlist via the catalog** — carry `auth.login_origins` (additional
+origin allowlist valid only during login) as a schema concept.
+Separate from the extraction-phase allowlist (`origin_allowlist`);
+`login_origins` applies only during the `login` subcommand and the
+`form` login procedure. Not surfaced by v1's local fixture, but
+carried in the schema early (Step 3).
 
 ---
 
-## 8. パラメータ注入の安全規約
+## 7. Containment model (interception spec)
 
-「JSON Schema 検証 + エスケープ」だけではセレクタ注入（敵対的に誘発された誤成功）を防げない:
+"Undeclared traffic blocking" does NOT stand up under a naive
+`page.route()` application. Fix the following as implementation
+spec:
 
-- **セレクタへの文字列補間は禁止**: フローはパラメータを locator の値バインディング
-  （`ctx.get_by_role(name=...)` / `.filter(has_text=...)` 相当）でのみ使用する。
-  XPath / CSS 文字列への `f-string` 埋め込みは登録レビューで機械的に reject
-  （レビューチェックリスト項目 + AST ゲートの補助）
-- **params_schema は値ごとに厳格制約を必須化**: enum / pattern / maxLength のいずれかを
-  各パラメータに要求（自由文字列を既定で許さない）。meta-schema
-  （`browser-extract-params-schema.json`）で強制。selector / JS / 任意 URL / 任意 path を
-  型として提供しない
-- **URL への埋め込み**: origin は catalog、パラメータは path segment / query 値として
-  canonicalize（http connector の encoded-separator 拒否・二重 encoding fail-closed を再利用）
+- **First-line defense is the flow-code discipline**: navigation
+  origin is always constructed from a catalog-declared named route,
+  and parameters are supplied only as validated path / value.
+  Direct `ctx.goto(param)` param→origin coupling is structurally
+  forbidden by the capability API. **Interception is the second
+  defense line.**
+- **Interception is context-scoped**:
+  `context.route('**/*', ...)` (page scope misses popups / new
+  tabs). Every request is matched against the catalog allowlist;
+  undeclared traffic aborts + is audited (`origin_blocked`).
+- **Allowlist granularity**: narrow beyond origin down to
+  **method + path prefix + resource type**. Canonicalize URLs before
+  matching (reject userinfo; IDN / punycode normalize; strip
+  trailing dot; make port explicit; reject encoded separators).
+  Canonicalize borrows the http connector's
+  `_canonicalize_segments` / origin normalization style.
+- **Suppress destructive operations inside the same origin**:
+  state-changing requests (POST etc.) allow only what the catalog
+  explicitly declares (login / TOTP / export job creation). Click
+  targets require role + accessible name as a compound condition
+  (`ctx.click`'s required kwargs). Primary defense is stripping
+  write permissions from the dedicated account.
+- **Service workers off**: `service_workers='block'` at context
+  creation.
+- **WebSocket deny-by-default**: `route_web_socket` rejects all WS
+  (do NOT add WS-required tools to v1's scope).
+- **Redirects revalidate each hop**: redirect targets are matched
+  against the origin allowlist; undeclared aborts. Blanket rejection
+  is unrealistic — per-hop revalidation.
+- **Reject navigation to `data:` / `blob:`** (no network request —
+  interception does not fire).
+- **Disable WebRTC via launch args**:
+  `--webrtc-ip-handling-policy=disable_non_proxied_udp` etc. The
+  residual is a known limit (§Known limits, on par with DNS
+  rebinding).
+- **Launch profile isolation**: headless + per-run ephemeral
+  user-data-dir + no remote debugging port + fresh context per run.
+  The only exception is the `login` subcommand (headed but
+  structurally cannot extract or deliver).
+- **Fixed context**: locale / timezone / viewport fixed at context
+  creation (suppresses DOM non-determinism).
 
 ---
 
-## 9. seal-at-prepare 状態機械
+## 8. Parameter-injection safety rules
 
-### 遷移表
+"JSON Schema validation + escaping" alone does NOT prevent selector
+injection (adversarially induced false success):
+
+- **String interpolation into selectors is banned**: flows use
+  parameters only as locator value bindings
+  (`ctx.get_by_role(name=...)` / `.filter(has_text=...)`
+  equivalents). `f-string` embedding into XPath / CSS strings
+  rejects mechanically at registration review (a review-checklist
+  item + AST gate assistance).
+- **`params_schema` requires strict per-value constraints**: each
+  parameter must have one of `enum` / `pattern` / `maxLength`
+  (arbitrary strings not permitted by default). Enforced by the
+  meta-schema (`browser-extract-params-schema.json`). Do NOT expose
+  types for selectors / JS / arbitrary URLs / arbitrary paths.
+- **URL embedding**: origin from the catalog; parameters as path
+  segments / query values, canonicalized (reuses http connector's
+  encoded-separator rejection and double-encoding fail-closed).
+
+---
+
+## 9. Seal-at-prepare state machine
+
+### Transition table
 
 ```
 prepared(sealed) → approved → delivering → delivered
        │                          │
-       │                          └──(不明失敗, hash 照合可)──> delivering（再開）
-       │                          └──(不明失敗, hash 照合不可)─> failed（再 prepare が必要）
-       ├──(TTL 超過)──────────────────────────────────────────> expired（janitor 回収）
-       └──(未承認のまま TTL 超過)────────────────────────────> expired（janitor 回収）
+       │                          └──(unknown failure, hash matches)──> delivering (resume)
+       │                          └──(unknown failure, hash mismatch)─> failed (re-prepare required)
+       ├──(TTL exceeded)─────────────────────────────────────────────> expired (janitor collects)
+       └──(TTL exceeded while unapproved)────────────────────────────> expired (janitor collects)
 ```
 
-| status | 意味 | 次遷移 |
+| status | Meaning | Next transition |
 |---|---|---|
-| `prepared` | 抽出完了・封印済み（`sealed_artifact_digest` / `sealed_manifest_digest` を持つ） | approve で `approved` へ |
-| `approved` | 人間承認済み（pin ハッシュを記録） | execute で `delivering` へ |
-| `delivering` | delivery 実行中（CAS で永続化） | 成功で `delivered`、不明失敗で条件付き再開 or `failed` |
-| `delivered` | delivery 完了（terminal） | — |
-| `failed` | 復旧不能（terminal、再 prepare が必要） | — |
-| `expired` | TTL 超過（terminal、janitor 回収対象） | — |
+| `prepared` | Extraction complete, sealed (has `sealed_artifact_digest` / `sealed_manifest_digest`) | Approve → `approved` |
+| `approved` | Human-approved (pin hash recorded) | Execute → `delivering` |
+| `delivering` | Delivery in progress (persisted via CAS) | Success → `delivered`; unknown failure → conditional resume or `failed` |
+| `delivered` | Delivery complete (terminal) | — |
+| `failed` | Unrecoverable (terminal, re-prepare required) | — |
+| `expired` | TTL exceeded (terminal, janitor collects) | — |
 
-- 遷移は **CAS で永続化**（既存 state.json durable write の流儀）
-- **delivery 途中の不明失敗は自動 retry しない**。封印済み成果物のハッシュ照合が
-  取れた場合のみ `delivering` を再開できる（取れなければ `failed` → 再 prepare）
-- `prepared` は **row_count 付きの第一級監査イベント**（未承認でも抽出事実が残る）
+- Transitions **persist via CAS** (following the existing
+  `state.json` durable-write style).
+- **Delivery-mid unknown failures do NOT auto-retry**. Only when
+  the sealed artifact's hash matches can `delivering` resume (else
+  `failed` → re-prepare).
+- `prepared` is a **first-class audit event carrying `row_count`**
+  (the extraction fact is recorded even without approval).
 
-### 承認は single-use・TTL 24h
+### Approval is single-use, TTL 24h
 
-approve は single-use（consumed = 承認の消費）、TTL 24h。既存 tool-query の
-`consume_transition` / `is_expired` / `compute_expires_at` を再利用する（§11）。
+Approve is single-use (`consumed` = approval consumed), TTL 24h.
+Reuses tool-query's `consume_transition` / `is_expired` /
+`compute_expires_at` (§11).
 
 ---
 
-## 10. approve TTY プロンプトと reason code
+## 10. Approve TTY prompt and reason codes
 
-### 承認材料（TTY 表示、LLM 代行禁止）
+### Approval material (TTY display, LLM substitution banned)
 
-approve は §0 の再導出 + 監査アンカー照合を通した上で、以下を human に提示する:
+Approve, after passing §0's re-derivation + audit-anchor match,
+presents to the human:
 
-- どの identity / live session で取得したか
-- **read-only は非強制であること**の明示
-- **承認は配布のみを制御し抽出は完了済みであること**の明示
-- 封印済み成果物のハッシュ（再導出値）とプレビュー（先頭 N 行 + 列→抽出元マッピング）
-- 件数 + 独立 anchor の照合結果
-- **封印時刻（manifest の `extracted_at`）・経過時間・TTL 残**
-- 途中失敗時は再 prepare になること
+- Which identity / live session was used to acquire the data.
+- **Read-only is not enforced** — stated explicitly.
+- **Approval only controls distribution; extraction is already
+  complete** — stated explicitly.
+- The sealed artifact's hash (the re-derived value) and preview
+  (first N rows + column → source mapping).
+- Row count + independent-anchor match results.
+- **Seal time (`extracted_at` in manifest), elapsed time, TTL
+  remaining**.
+- On mid-run failure, next step is re-prepare.
 
-### プレビュー描画規則（未信頼バイトとして扱う）
+### Preview rendering rules (treat as untrusted bytes)
 
-抽出データは未信頼バイト。承認プロンプト自体を偽装させない:
+Extracted data is untrusted bytes. Do NOT let the approval prompt
+be spoofed:
 
-- 非印字文字・ESC はエスケープ表示（端末エスケープ注入対策）
-- East Asian width を考慮した幅認識クリップ
-- 行/列の明示的 truncation マーカー
-- 先頭 N 行のデフォルト値（既定 `PREVIEW_ROWS = 10`）
+- Non-printing / ESC characters shown escaped (terminal-escape
+  injection defense).
+- Width-aware clipping considering East Asian Width.
+- Explicit truncation markers for rows / columns.
+- Default first-N rows (`PREVIEW_ROWS = 10`).
 
-### browser reason code + hint 表（what / why / next）
+### Browser reason codes + hint table (what / why / next)
 
-各 reason は「何が起きたか / なぜ / 次に何をするか」を持つ。**位置情報の方針**:
-step index・capability 名・check id は git 管理フロー / catalog 由来の識別子であり
-sanitize 不変条件を破らないため添付可。実行時値（URL・セレクタ値・DOM）は**不可**。
+Each reason carries "what happened / why / next step." **Location
+information policy**: step index, capability name, and check id are
+git-managed flow / catalog identifiers and do NOT break sanitize
+invariants — attachable. Runtime values (URL, selector value, DOM)
+are **not attachable**.
 
 | reason code | what | why | next |
 |---|---|---|---|
-| `selector_not_found` | 期待する locator が見つからない | UI 変更 or フロー誤り | doctor 実行 → フロー修正 PR |
-| `ui_drift` | 画面構造が doctor 基準から乖離 | UI 変更 | doctor 実行 → フロー修正 PR |
-| `session_expired` | session state が失効 | TTL 超過 or サーバー側失効 | 再認証（`login` or form） |
-| `session_binding_mismatch` | session が tool/origin/account と不一致 | 別 profile の持込み | 正しい session で再取得 |
-| `origin_blocked` | 宣言外 origin/method/path へのリクエスト | フロー誤り or 攻撃 | フロー修正 PR / allowlist 見直し PR |
-| `readback_mismatch` | filter_readback が params と不一致 | フィルタ未反映 | フロー修正 PR / パラメータ確認 |
-| `seal_mismatch` | 再導出ハッシュが監査アンカーと不一致 | prepare 後の bundle 改変 | 再 prepare（承認しない） |
-| `flow_timeout` | hard wall-clock timeout 超過 | 遅延 or 無限待ち | フロー修正 PR / timeout 見直し |
-| `bundle_cap_exceeded` | 未承認 bundle 数が上限超過 | 承認滞留 | 未承認 bundle を approve or 失効させる |
-| `flow_pin_mismatch` | フローの SHA-256 が catalog 宣言と不一致 | 未追跡コード | catalog 更新 PR / フロー復元 |
-| `flow_ast_violation` | AST ゲート違反（import/exec/dunder 等） | 禁止構文 | フロー修正 PR |
-| `internal_error` | 分類不能の catch-all | 予期しない例外 | ログ確認・issue 化 |
+| `selector_not_found` | Expected locator not found | UI change or flow error | Run doctor → flow-fix PR |
+| `ui_drift` | Screen structure drifted from doctor baseline | UI change | Run doctor → flow-fix PR |
+| `session_expired` | Session state expired | TTL exceeded or server-side expiry | Re-auth (`login` or `form`) |
+| `session_binding_mismatch` | Session doesn't match tool / origin / account | Wrong profile brought in | Recapture with correct session |
+| `origin_blocked` | Request to undeclared origin / method / path | Flow error or attack | Flow-fix PR / allowlist-revision PR |
+| `readback_mismatch` | `filter_readback` disagrees with params | Filter not applied | Flow-fix PR / re-check params |
+| `seal_mismatch` | Re-derived hash disagrees with audit anchor | Bundle tampered post-prepare | Re-prepare (do NOT approve) |
+| `flow_timeout` | Hard wall-clock timeout exceeded | Delay or infinite wait | Flow-fix PR / timeout revision |
+| `bundle_cap_exceeded` | Unapproved-bundle count over cap | Approval backlog | Approve or expire outstanding bundles |
+| `flow_pin_mismatch` | Flow SHA-256 disagrees with catalog declaration | Untracked code | Catalog-update PR / restore the flow |
+| `flow_ast_violation` | AST gate violation (import / exec / dunder etc.) | Forbidden syntax | Flow-fix PR |
+| `internal_error` | Unclassifiable catch-all | Unexpected exception | Check logs, file an issue |
 
-reason code ごとにこの表の hint を CLI 出力に配線する（Step 6）。
+Route each reason's hint from this table into the CLI output
+(Step 6).
 
-### login の完了検知と検証
+### Login completion detection and validation
 
-- 完了シグナル: post-login URL 検知 or セレクタ検知 + **TTY Enter 待ちフォールバック** +
-  タイムアウト
-- 捕捉直後に doctor のログイン疎通チェック相当で state の有効性を検証（未認証のまま捕捉して
-  後日 `session_expired` で遅延顕在化させない）
-- 成功時は束縛メタデータ（tool / origin / account）と TTL を human に表示する
-
----
-
-## 11. service 層の再利用境界（シンボル粒度）
-
-モジュール一括の「再利用/再実装」二分では境界が引けない。以下のとおり裁定する:
-
-### そのまま import
-
-- `tool_delivery`（CSV 無害化 / staging-publish）
-- `tool_paths`（symlink 拒否パス封じ込め）
-- `tool_catalog.load_credential`（wiki_root + ref のみで SQL 非結合。catalog パーサ本体は
-  流用しない）
-- `lib/domain/tool_query` の純粋述語（`consume_transition` / `approve_transition` /
-  `is_expired` / `compute_expires_at` / `sha256_hex` / `parse_plan_id` / `build_plan_id`）
-
-### 先に抽出してから共有（Step 2）
-
-single-use / TTL の enforcement 実体（plan lock 下の state 読取 → matrix 評価 →
-`execute_attempted` 監査 → consume → durable state 書込、の fail-closed CAS シーケンス）は
-現在 `tool_query_runner.execute` 内にある。これを connector 非依存の承認ライフサイクル
-service（`tool_approval.py`）として抽出し、SQL 側・browser 側の両方がこれを使う。
-セキュリティ中核の二重実装と divergence を避けるため、再実装ではなく抽出を選ぶ。
-
-- **状態機械はパラメータ化**: tool_approval は status 集合と遷移表を引数に取る
-  （SQL デフォルト = `draft/approved/consumed` で不変）。domain には遷移表駆動の汎用
-  transition 関数を追加し、既存 `consume_transition` / `approve_transition` はその
-  特殊化として温存する
-- **state record の codec / status 別不変条件検証も adapter 注入面**に含める。既存
-  `state_from_json_dict` は draft/approved/consumed × フィールド不変条件をハードコード
-  しており、browser の状態スキーマ（封印ハッシュ・delivery 再開メタ）は別 codec が要る。
-  stub adapter contract test に SQL の PlanState 形を焼き込まない
-- 共有 core と browser adapter の間は **versioned interface**（bundle schema バージョン +
-  状態遷移の意味を固定）とし、SQL / browser 横断の contract test を置く
-- browser の遷移（`prepared→approved→delivering→delivered/failed/expired`、hash 照合付き
-  delivery 再開を含む）は browser 側遷移表にのみ存在させる
-
-### 監査の一般化（Step 2）
-
-共有 `tool_audit.py` は `ALLOWED_REASONS` / `AUDIT_EVENTS` が閉集合で browser の reason を
-通せない。既存 SQL 系の信頼境界（enum 同期テスト含む）に触れないため、**監査は
-`browser-audit.jsonl` に分離**し、`AuditLog` は許可 enum レジストリと出力パスを注入可能に
-一般化して共有する。**注入面を明示**:
-
-1. **events**: `(event名, plan_dependent)` の組で注入（既存 `PLAN_INDEPENDENT_EVENTS` の
-   plan_id 必須/禁止判定も注入面に含める。browser の `login` は plan 非依存イベント）
-2. **subcommands**
-3. **reasons**（許可 enum レジストリ）
-4. **digest フィールド仕様**（`sql_digest` → browser では `artifact_digest` /
-   `manifest_digest` / flow ref）
-5. **出力パス**
-
-SQL 側デフォルトは不変・enum 同期テスト維持。値を含まないメタデータのみの不変条件は同一。
-
-### browser 専用に新設
-
-catalog パース（browser schema 用）、フロー実行、検証契約エンジン。
-
-### plan namespace の型ガード
-
-bundle 置き場は browser 専用ルート（`outputs/browser-plans/`）に分離し、approve / execute
-時に対象 plan の tool type が起動 CLI と一致することを検証する（SQL CLI から browser plan を
-consume できる取り違えを遮断）。
+- Completion signals: post-login URL detection or selector
+  detection, plus **TTY-Enter-wait fallback**, plus timeout.
+- Immediately after capture, validate state validity with a
+  doctor-equivalent login-reachability check (do NOT capture
+  unauthenticated and let it surface later as `session_expired`).
+- On success, display the binding metadata (tool / origin /
+  account) and TTL to the human.
 
 ---
 
-## 12. 中間成果物の保持ポリシーと janitor
+## 11. Service-layer reuse boundary (symbol granularity)
 
-スクショ・trace・一時ダウンロードは CSV 以外にも機密が残る:
+Module-wide "reuse vs re-implement" cannot draw the boundary. Ruling:
 
-- bundle 配下（spool）に閉じ込め、TTL + execute 完了時の削除規則を契約に含める
-- `storage_state` は runner が 0600 atomic write（O_NOFOLLOW / umask）で永続化
-- **trace は network body capture を無効化**して記録（Authorization / Set-Cookie / token が
-  trace.zip に残る）、**HAR はデフォルト off**、auth 操作区間の screenshot は抑止
-- 成果物・trace には `max_artifact_bytes`（catalog limits）の byte 上限
-- **正常終了時削除だけでは回収できない**（SIGKILL・再起動・disk full）ため、CLI 起動時に
-  期限切れ / incomplete bundle を回収する **janitor パス**を持つ。削除失敗は監査して次回再試行
+### Import as-is
 
-### download の安全規律
+- `tool_delivery` (CSV neutralization / staging-publish).
+- `tool_paths` (symlink-rejecting path containment).
+- `tool_catalog.load_credential` (wiki_root + ref only, no SQL
+  coupling — the catalog parser body is NOT reused).
+- `lib/domain/tool_query` pure predicates (`consume_transition` /
+  `approve_transition` / `is_expired` / `compute_expires_at` /
+  `sha256_hex` / `parse_plan_id` / `build_plan_id`).
 
-- サーバー指定 filename は保存名に使わず runner 生成のランダム名 + atomic rename
-  （size / hash 確定後）
-- redirect 全 hop の origin 再検証は interception 層が担い、byte 上限・時間上限超過は abort
-- partial file は失敗として削除。検証完了前の delivery は構造的に不可能（seal-at-prepare の帰結）
+### Extract and share first (Step 2)
+
+The single-use / TTL enforcement body (fail-closed CAS sequence
+under the plan lock: read state → evaluate matrix →
+`execute_attempted` audit → consume → durable state write) is
+currently inside `tool_query_runner.execute`. Extract it as a
+connector-independent approval-lifecycle service
+(`tool_approval.py`) and use it from both SQL and browser sides.
+To avoid double-implementation and divergence in security core,
+extract — do NOT re-implement.
+
+- **Parameterize the state machine**: `tool_approval` takes the
+  status set and transition table as arguments (SQL default =
+  `draft/approved/consumed` unchanged). Add a transition-table-driven
+  general transition function to the domain; keep the existing
+  `consume_transition` / `approve_transition` as specializations.
+- **State-record codec / per-status invariant validation are also
+  adapter injection surfaces**. Existing `state_from_json_dict`
+  hard-codes draft/approved/consumed × field invariants; the
+  browser's state schema (seal hash, delivery-resume metadata)
+  needs a different codec. Do NOT bake the SQL PlanState shape into
+  the stub adapter's contract test.
+- Between the shared core and browser adapter, use a **versioned
+  interface** (bundle-schema version + state-transition semantics
+  fixed). Place a cross-SQL/browser contract test.
+- Browser transitions
+  (`prepared→approved→delivering→delivered/failed/expired`,
+  including hash-matched delivery resume) live only in the browser
+  transition table.
+
+### Generalize the audit (Step 2)
+
+The shared `tool_audit.py` `ALLOWED_REASONS` / `AUDIT_EVENTS` are
+closed sets that cannot pass browser reasons. To avoid touching the
+existing SQL trust boundary (including the enum-sync test),
+**separate audit into `browser-audit.jsonl`** and generalize
+`AuditLog` so the allowed-enum registry and output path are
+injectable. **Injection surfaces (explicit)**:
+
+1. **events**: inject as `(name, plan_dependent)` pairs (the
+   existing `PLAN_INDEPENDENT_EVENTS` plan_id required/forbidden
+   judgment is also an injection surface — browser's `login` is a
+   plan-independent event).
+2. **subcommands**.
+3. **reasons** (allowed-enum registry).
+4. **digest field spec** (`sql_digest` → browser's
+   `artifact_digest` / `manifest_digest` / flow ref).
+5. **output path**.
+
+SQL-side defaults unchanged; enum-sync tests preserved. The
+"metadata only, no values" invariant is identical.
+
+### New for browser only
+
+Catalog parse (for the browser schema), flow execution, verification-
+contract engine.
+
+### Plan-namespace type guard
+
+Bundle location is separated under a browser-only root
+(`outputs/browser-plans/`). At approve / execute time, verify that
+the target plan's tool type matches the launching CLI (blocks a mix-up
+where a SQL CLI consumes a browser plan).
 
 ---
 
-## 13. 異常系の扱い
+## 12. Intermediate artifact retention policy and the janitor
 
-| 異常系 | 扱い |
+Screenshots, traces, and temporary downloads carry sensitive material
+even beyond CSV:
+
+- Enclose under the bundle (spool) — the contract includes TTL + a
+  delete-on-execute-complete rule.
+- `storage_state` is persisted by the runner via 0600 atomic write
+  (O_NOFOLLOW / umask).
+- **Traces disable network body capture** on recording (Authorization
+  / Set-Cookie / token would remain in `trace.zip`). **HAR is off by
+  default.** Screenshots during auth operations are suppressed.
+- Artifacts and traces have a byte cap (`max_artifact_bytes` in
+  catalog limits).
+- **Delete-on-normal-exit alone cannot collect** (SIGKILL, restart,
+  disk full) — the CLI carries a **janitor path** that collects
+  expired / incomplete bundles at startup. Delete failures are
+  audited and retried next time.
+
+### Download safety discipline
+
+- Server-supplied `filename` is NOT used as the save name — the
+  runner generates a random name + atomic rename (after size / hash
+  finalization).
+- Redirect origin revalidation per hop is the interception layer's
+  responsibility. Byte cap / time cap overrun aborts.
+- Partial files are treated as failure and deleted. Delivery before
+  verification completion is structurally impossible (a
+  seal-at-prepare consequence).
+
+---
+
+## 13. Exception handling
+
+| Anomaly | Handling |
 |---|---|
-| 2FA 期限切れ | `session_expired` で fail-closed。再認証（login / form）を hint |
-| 権限変更（prepare 後） | seal-at-prepare のため execute 時のブラウザ再実行はない。delivery のみ。prepare 時の権限で完結 |
-| 部分取得 | `row_count_range` + 独立 anchor で検出し fail-closed（B1）/ B2 は silent truncation マーク or 拒否 |
-| delivery 途中の不明失敗 | 封印ハッシュ照合が取れた場合のみ `delivering` 再開、取れなければ `failed` → 再 prepare |
+| 2FA expired | Fail-closed with `session_expired`; hint re-auth (`login` / `form`) |
+| Permission change (post-prepare) | Seal-at-prepare: no browser rerun at execute time — delivery only. Completed under prepare-time permissions |
+| Partial fetch | B1: `row_count_range` + independent anchor detect and fail-closed. B2: silent-truncation mark or reject |
+| Delivery-mid unknown failure | Resume `delivering` only when the seal hash matches; else `failed` → re-prepare |
 
-### 例外の sanitize（runner 境界で全例外）
+### Exception sanitization (all exceptions at the runner boundary)
 
-Playwright の TimeoutError 等は URL（query 内 token 含む）・セレクタ・call log・DOM 断片を
-埋め込む。フローコードや capability API 内の非 Playwright 例外（パラメータ値を含む
-ValueError 等）も traceback で漏れ得る。**runner 境界を越える全例外**を catch して閉じた
-browser reason enum に写像し、生の例外テキストを監査 / stdout / CLI 出力に**一切**通さない
-（http connector が `from None` で credential 含み例外を剥がすのと同じ規律）。
+Playwright TimeoutError etc. embed URLs (with tokens in query),
+selectors, call logs, and DOM fragments. Non-Playwright exceptions
+inside the flow code or capability API (parameter-value-carrying
+`ValueError` etc.) can also leak through tracebacks. **Catch every
+exception crossing the runner boundary**, map it to the closed
+browser reason enum, and **NEVER** pass raw exception text to audit
+/ stdout / CLI output (same discipline as the http connector using
+`from None` to strip credential-carrying exceptions).
 
-### ブラウザライフサイクル契約
+### Browser lifecycle contract
 
-context manager で browser / context / page を管理し `finally` で確実に close。フローごとの
-hard wall-clock timeout 超過時と SIGINT 時はブラウザプロセスを force-kill してから exit
-（130 契約維持）。ゾンビ chromium と user-data-dir ロック残留を許さない。
-
----
-
-## 14. http 還元ゲート（登録前必須）
-
-browser tool を作る前に必ず通す:
-
-- フロー実行中の network log から export リクエストを捕捉し、`tool_connector_http` での
-  replay を試行する
-- 再現できたら **http connector として登録し browser tool は作らない**（保証水準が高い方を選ぶ）
-- capture 実行の封じ込め: 登録前実行は **draft catalog entry の下で本番と同一の封じ込めを
-  適用**する（interception・ephemeral profile・監査すべて同一契約）
+Manage browser / context / page with a context manager and reliably
+close in `finally`. On per-flow hard wall-clock timeout and on
+SIGINT, force-kill the browser process before exit (maintains the
+130 contract). No zombie Chromium and no lingering user-data-dir
+locks.
 
 ---
 
-## 15. 登録時壁打ちワークフロー
+## 14. HTTP reduction gate (mandatory before registration)
 
-1. **http 還元ゲート**（§14、draft catalog entry の封じ込め下）
-2. **tier 判定**（§5、独立 anchor を構成できるか）
-3. **検証契約の組み立て**（§4 の閉語彙から。B1 は独立 anchor 最低1つ）
-4. **別主体レビュー — 独立根拠 + 反証 fixture 必須**:
-   共通原因故障（フローと検証を同一 LLM が書くと同じ誤解を両方に埋め込む）を、主体分離
-   だけでは防げない（同じ画面・同じ正常 fixture を根拠にした誤解の追認）。登録ゲートの
-   条件は「別主体」ではなく「**独立根拠 + 反証 fixture の提示**」。レビュー側が誤成功系
-   fixture（セレクタずれ・別 tenant 同型画面・filter 未反映・pagination 欠落・部分 export
-   等）を用意し、検証契約が**全て拒否**することを登録合格条件にする
-5. **doctor**（ログイン → 遷移 → セレクタ実在確認）
-6. **prepare → approve → execute** を一周
+Always pass this before creating a browser tool:
 
-fixture は正常系1件で済ませず**誤成功系 corpus**を用意し、各変異の拒否率と正常系の
-誤拒否を記録して語彙 v1 の過不足を定量評価する。
+- Capture the export request from the network log during flow
+  execution; try to replay it via `tool_connector_http`.
+- If reproducible, **register as an HTTP connector and do NOT build a
+  browser tool** (choose the higher-assurance option).
+- Contain the capture run: pre-registration execution runs **under a
+  draft catalog entry with production-identical containment**
+  (interception / ephemeral profile / audit — all under the same
+  contract).
 
-### B1 プロトタイプ実測（Step 7）
+---
 
-検証契約 = filter_readback / row_count_range / ui_total_vs_file_rows /
-primary_key_unique / tenant_id_match の 5 check（正しさ 3 + 独立 anchor 3、重複含む）で、
-誤成功系 corpus 8 変異を `test_browser_extract_corpus.py` で実測した。フロー実行の成果
-（ExtractionResult）を fake 注入し、検証契約 enforce（browser 非依存の pure ロジック）を
-測っている。
+## 15. Registration walkthrough
 
-| 誤成功系変異 | 捕捉した check | 拒否 reason |
+1. **HTTP reduction gate** (§14, under draft-catalog-entry
+   containment).
+2. **Tier decision** (§5 — can an independent anchor be formed?).
+3. **Build the verification contract** (from §4's closed vocabulary;
+   B1 requires at least one independent anchor).
+4. **Independent reviewer — independent grounds + counterexample
+   fixture required**:
+   Common-cause failure (a single LLM writing both flow and
+   verification embeds the same misunderstanding in both) is NOT
+   preventable by actor separation alone (agreement on
+   misunderstanding grounded in the same screen and same normal
+   fixture). The registration-gate condition is NOT "an independent
+   actor" — it is "**presentation of independent grounds + a
+   counterexample fixture**." The reviewer prepares a false-success
+   fixture (selector drift, same-shape screen on a different
+   tenant, filter-not-applied, dropped pagination, partial
+   export, etc.) and registration passes only when the
+   verification contract **rejects all cases**.
+5. **doctor** (login → navigate → selector-exists).
+6. **prepare → approve → execute** — one full loop.
+
+Fixtures are NOT satisfied by one normal case — prepare a
+**false-success corpus** and record per-mutation rejection rates
+plus normal-case false rejections to quantitatively evaluate
+v1 vocabulary sufficiency.
+
+### B1 prototype measurement (Step 7)
+
+Verification contract = 5 checks (`filter_readback`,
+`row_count_range`, `ui_total_vs_file_rows`, `primary_key_unique`,
+`tenant_id_match` — 3 correctness + 3 independent anchor, some
+overlap). Measured against 8 false-success mutations in
+`test_browser_extract_corpus.py`. Fake-injected the flow's execution
+outcome (`ExtractionResult`) to measure verification-contract
+enforcement (browser-independent pure logic).
+
+| False-success mutation | Catching check | Reject reason |
 |---|---|---|
-| filter 未反映 | filter_readback | `readback_mismatch` |
-| 別 tenant 同型画面（誤セレクタ） | tenant_id_match | `tenant_mismatch` |
-| pagination 欠落 | ui_total_vs_file_rows | `ui_total_mismatch` |
-| 部分 download | ui_total_vs_file_rows | `ui_total_mismatch` |
-| truncation | ui_total_vs_file_rows | `ui_total_mismatch` |
-| HTML エラーページ 200 | row_count_range | `row_count_out_of_range` |
-| 空結果 | row_count_range | `row_count_out_of_range` |
-| 主キー重複（二重取得） | primary_key_unique | `duplicate_primary_key` |
+| Filter not applied | `filter_readback` | `readback_mismatch` |
+| Same-shape screen on different tenant (bad selector) | `tenant_id_match` | `tenant_mismatch` |
+| Dropped pagination | `ui_total_vs_file_rows` | `ui_total_mismatch` |
+| Partial download | `ui_total_vs_file_rows` | `ui_total_mismatch` |
+| Truncation | `ui_total_vs_file_rows` | `ui_total_mismatch` |
+| HTML error page 200 | `row_count_range` | `row_count_out_of_range` |
+| Empty result | `row_count_range` | `row_count_out_of_range` |
+| Duplicate primary key (double fetch) | `primary_key_unique` | `duplicate_primary_key` |
 
-**結果**: 8 変異すべて拒否（拒否率 100%）、正常系の誤拒否 0。
+**Result**: 8/8 mutations rejected (100% rejection rate), 0
+normal-case false rejections.
 
-**語彙 v1 の過不足に関する所見**:
+**Observations on v1 vocabulary sufficiency**:
 
-- **ui_total_vs_file_rows が完全性系（pagination/部分/truncation）の 3 変異を単独で捕捉**
-  している。これは「UI が示す総数」という独立 oracle が効いている証拠。UI に total 表示が
-  ない画面ではこの anchor を構成できず B2 降格になる（B1 の前提条件どおり）
-- **「値だけが違い、shape・件数・tenant が正常な誤セレクタ」は語彙単独では捕捉できない**
-  残余。tenant_id_match は tenant 境界の誤りは捕むが、同一 tenant 内で別の正常データを
-  掴む誤セレクタは検出圏外。この class は登録時の別主体レビュー（独立根拠 + 反証 fixture）と
-  filter_readback / row_count_range の併用で狭めるしかなく、v1 の既知の限界として記録する
-- artifact_hash / screen_fingerprint は本 corpus では未使用（前者は bundle→delivery の
-  完全性、後者は catalog 宣言の基準指紋を要する）。実サイト適用時に screen_fingerprint の
-  基準取得手順を詰める（次サイクル）
-
----
-
-## 16. 既知の限界（honest scoping）
-
-guide に明記して受容する残余:
-
-- **read-only 非強制**: 宣言フロー外の操作をしない + 証跡、の honest scoping に留める
-  （MariaDB 保証範囲外と同じ流儀）。read-only の機械的**強制**は v1 の Non-Goal
-- **DNS rebinding**: allowlist はホスト名照合。長命セッションの rebinding リスクは残る
-- **WebRTC 残余**: launch args で塞ぐが、塞ぎ切れない経路は DNS rebinding と同格
-- **doctor のログイン副作用**: doctor はデータ非接触を主張**しない** — ログインと遷移自体が
-  session 生成・last-login 更新等の副作用を持つ。「**抽出・成果物生成をしない / 明示的
-  destructive action をしない**」に狭めて宣言する。doctor 実行中は trace / screenshot /
-  DOM 保存を無効化する
-- **監査 JSONL の可書性**（§0 の残余）: 攻撃者は監査履歴も書き換えねばならない、まで bar を
-  上げるに留まる
-- **in-process Python の構造的封じ込め不能**（§2）: hash pin + AST ゲート + PR レビューは
-  事故防止とレビュー支援であり、悪意フローへの構造的境界は主張しない
-- **egress proxy / network namespace による OS 層の通信封じ込め**: interception 層の限界への
-  二重化は将来オプション（本 guide に記録のみ）
+- **`ui_total_vs_file_rows` alone catches the 3 completeness
+  mutations** (pagination / partial / truncation). Evidence that
+  the independent oracle "the total shown in UI" is doing the work.
+  Screens without a UI total cannot form this anchor and drop to
+  B2 (matches the B1 precondition).
+- **"Different value only — shape, count, tenant all normal — bad
+  selector" is a residual not caught by vocabulary alone.**
+  `tenant_id_match` catches tenant-boundary errors, but a bad
+  selector that grabs different normal data inside the same tenant
+  is out of scope. Narrow this class via the registration-time
+  independent-reviewer step (independent grounds + counterexample
+  fixture) plus concurrent `filter_readback` / `row_count_range`.
+  Recorded as a v1 known limit.
+- `artifact_hash` / `screen_fingerprint` are unused in this corpus
+  (the former is bundle→delivery completeness, the latter needs a
+  catalog-declared baseline fingerprint). At real-site adoption,
+  the baseline-acquisition procedure for `screen_fingerprint` is
+  worked out in the next cycle.
 
 ---
 
-## 17. bootstrap 手順（Playwright）
+## 16. Known limits (honest scoping)
 
-browser 系は本体 requirements.txt を汚さない。opt-in で別ファイルを使う:
+Residuals recorded in the guide and accepted:
+
+- **Read-only NOT enforced**: honest scoping — "don't act outside
+  the declared flow" + provenance (same style as MariaDB out of
+  scope). Mechanical **enforcement** of read-only is a v1 Non-Goal.
+- **DNS rebinding**: allowlist matches by hostname. Rebinding risk
+  on long-lived sessions remains.
+- **WebRTC residual**: closed via launch args; the remaining path
+  is on par with DNS rebinding.
+- **Doctor's login side effect**: doctor does NOT claim data
+  non-contact — login and navigation carry side effects (session
+  creation, last-login update, etc.). Declared narrowly as "**does
+  NOT extract / does NOT produce artifacts / does NOT perform
+  explicit destructive actions**." During doctor, trace /
+  screenshot / DOM saving are disabled.
+- **Audit JSONL writability** (§0 residual): the bar rises to "the
+  attacker must also tamper with audit history," no higher.
+- **Structural containment of in-process Python is unachievable**
+  (§2): hash pin + AST gate + PR review are accident prevention
+  and review support — do NOT claim a structural boundary against
+  malicious flows.
+- **OS-layer traffic containment via egress proxy / network
+  namespace**: doubling up on the interception-layer limit is a
+  future option (recorded here only).
+
+---
+
+## 17. Bootstrap (Playwright)
+
+Browser system does NOT pollute the main `requirements.txt`. Opt-in
+uses a separate file:
 
 ```
-# 依存インストール（別ファイル、flat requirements に extras 機構がないため分離）
+# Install dependencies (separate file; flat requirements has no
+# extras mechanism, so we separate).
 uv pip install -r requirements-browser.txt
 
-# ブラウザバイナリの取得（初回のみ）
+# Fetch browser binaries (first time only).
 python -m playwright install chromium
 ```
 
-playwright は下限 1.48 以上（`route_web_socket` 必須）+ major.minor 上限付きで宣言する。
+`playwright` is declared with a lower bound ≥ 1.48 (`route_web_socket`
+required) + `major.minor` upper bound.
 
-browser 実 E2E テストは DB smoke と同じ opt-in 環境変数ゲート
-（`BROWSER_EXTRACT_SMOKE` 未設定時 skip）。ブラウザ非依存の判定ロジック（allowlist 照合・
-URL 正規化・状態機械・保持ポリシー判定・janitor のファイル操作・AST ゲート）は常時実行。
+Real E2E browser tests are gated by the same opt-in env-var scheme as
+DB smoke (`BROWSER_EXTRACT_SMOKE` unset → skip). Browser-independent
+decision logic (allowlist match, URL canonicalization, state
+machine, retention-policy judgment, janitor file operations, AST
+gate) runs on every test invocation.
 
-### 実測（2026-07-17 / WSL2 Ubuntu, Python 3.12.3, uv 管理 .venv）
+### Measured (2026-07-17 / WSL2 Ubuntu, Python 3.12.3, uv-managed `.venv`)
 
 ```
 uv pip install --python .venv/bin/python -r requirements-browser.txt
 .venv/bin/python -m playwright install chromium
 ```
 
-- `requirements-browser.txt` の `playwright>=1.48,<1.55` は **1.54.0** に解決された（上限内、bump 不要）
-- **WSL2 で system deps 不足は顕在化しなかった**。`chromium.launch(headless=True)` と runner が
-  実際に使う `launch_persistent_context(service_workers="block", locale/timezone/viewport 固定,
-  args=WebRTC 無効化)` + `context.route("**/*")` + `context.route_web_socket("**/*")` が
-  いずれも追加 lib なしで起動・動作した。`route_web_socket` は 1.54 で提供される（下限 1.48 と整合）
-- **system deps が不足する環境**（`error while loading shared libraries: lib*.so`）では
-  `python -m playwright install-deps chromium` 相当が必要だが、これは `apt-get` を呼ぶため
-  **sudo が要る**。その場合はエラーに出た不足 lib 名を控え、`sudo python -m playwright
-  install-deps chromium`（または `sudo apt-get install` で個別 lib）を**人間に実行を依頼**し、
-  該当 smoke は system deps 導入後に再実行する（エージェントは sudo を実行しない）
-- ブラウザバイナリは `~/.cache/ms-playwright/`（`.venv` 外・グローバル共有、gitignore 対象外の HOME 配下）
+- `requirements-browser.txt`'s `playwright>=1.48,<1.55` resolved to
+  **1.54.0** (within the upper bound, no bump needed).
+- **On WSL2, missing system deps did NOT surface.**
+  `chromium.launch(headless=True)` and the runner's actual
+  `launch_persistent_context(service_workers="block",
+  fixed locale/timezone/viewport, args=WebRTC disabled)` +
+  `context.route("**/*")` + `context.route_web_socket("**/*")` all
+  launched and worked without additional libs. `route_web_socket`
+  is provided in 1.54 (consistent with the ≥ 1.48 lower bound).
+- **On environments where system deps are missing** (`error while
+  loading shared libraries: lib*.so`), the equivalent of
+  `python -m playwright install-deps chromium` is required. Since
+  that calls `apt-get`, it **requires sudo**. In that case, note
+  the missing lib names from the error and **ask a human to run**
+  `sudo python -m playwright install-deps chromium` (or
+  `sudo apt-get install` per lib) and rerun the smoke after
+  installation (the agent does NOT run sudo).
+- Browser binaries land at `~/.cache/ms-playwright/` (outside
+  `.venv`, globally shared, under HOME — not covered by gitignore).
 
-### smoke で実測した項目（2026-07-17、`BROWSER_EXTRACT_SMOKE=1`）
+### Items measured under smoke (2026-07-17, `BROWSER_EXTRACT_SMOKE=1`)
 
-`lib/service/test_browser_flow_runner.py` の smoke クラスが fixture サーバー相手に実測:
+`lib/service/test_browser_flow_runner.py`'s smoke class measures
+against the fixture server:
 
-- **interception**: 宣言内 origin は継続、宣言外 origin は abort + `on_block` 通知、
-  **context スコープ**なので新規タブ（`context.new_page()`）からの宣言外リクエストも捕捉
-- **service_workers='block'**: ナビゲーション後も `context.service_workers == []`
-- **teardown**: 正常終了・フロー内例外の両経路で context close + ephemeral user-data-dir 削除
-- **hard timeout**: 応答しない `/hang` への navigation が page 既定 timeout 超過 →
-  `TimeoutError` → `flow_timeout` に sanitize、udd も purge
-- **download**: fixture の Export CSV を実 download し、サーバー指定名ではなく runner 生成名で
-  spool に atomic 配置（`.part` → `os.replace`）、bytes が CSV と一致
+- **interception**: declared origins continue; undeclared origins
+  abort + `on_block` notification; because it is **context-scoped**,
+  undeclared requests from new tabs (`context.new_page()`) are
+  also caught.
+- **`service_workers='block'`**: after navigation,
+  `context.service_workers == []`.
+- **teardown**: on both normal exit and mid-flow exception,
+  context close + ephemeral user-data-dir removal.
+- **hard timeout**: navigation to unresponsive `/hang` exceeds the
+  page default timeout → `TimeoutError` → sanitized to
+  `flow_timeout`; user-data-dir purged.
+- **download**: real download of the fixture's Export CSV — saved
+  with a runner-generated name (NOT the server-supplied name),
+  atomic placement in spool (`.part` → `os.replace`), bytes
+  matching the CSV.
 
-honest scoping（実測しないもの）:
+Honest scoping (NOT measured):
 
-- **live WebSocket 拒否は実ソケットで測らない**。sync Playwright dispatcher は route
-  ハンドラ実行中に page の Promise を待つと deadlock し得るため、WS deny は
-  **mechanism テスト**（`install_interception` が context スコープで `route_web_socket("**/*")`
-  を設置することを fake context で検証、常時実行）に留める。v1 対象ツールに WS 必須のものは
-  入れない方針（§7）と整合
-- **SIGINT force-kill / data:・blob: navigation 拒否**: 前者は teardown の `finally` +
-  process 終了で構造的に担保（決定的な自動 smoke にしづらい）、後者は capability API の
-  goto が catalog origin しか構成できない構造 + `canonicalize_request_url` の scheme 拒否
-  （常時実行 unit）で担保する
+- **Live WebSocket rejection is NOT tested against a real
+  socket**. Sync Playwright's dispatcher can deadlock if the page
+  Promise is awaited inside a route handler; WS-deny is confined
+  to the **mechanism test** (`install_interception` places
+  `route_web_socket("**/*")` context-scoped — verified against a
+  fake context, always-on). Consistent with the §7 policy of not
+  admitting WS-required tools to v1.
+- **SIGINT force-kill / rejection of `data:` / `blob:` navigation**:
+  the former is structurally covered by the teardown `finally` +
+  process exit (hard to make a deterministic automated smoke);
+  the latter is covered by capability-API `goto` that only builds
+  catalog origins plus `canonicalize_request_url`'s scheme
+  rejection (always-on unit).
 
-### canonicalize の実測知見（smoke で発覚し修正）
+### Canonicalize insights measured (surfaced by smoke and fixed)
 
-`canonicalize_request_url` は http connector の segment 正規化を流用するが、ブラウザ特有の
-2 点を smoke が炙り出した（いずれも常時実行 unit テストで固定済み）:
+`canonicalize_request_url` borrows the http connector's segment
+normalization, but smoke surfaced two browser-specific points
+(both now pinned by always-on unit tests):
 
-- **IP リテラル host**（ローカル fixture の `127.0.0.1` / `[::1]`）は IDNA エンコードできない。
-  数値ホストは IDNA を通さず素通しし、IPv6 は origin で `[...]` に包む
-- **root `/` と単一末尾スラッシュ**はブラウザが正常に発行するが http connector の segment
-  正規化は空 segment として拒否する。照合前に browser 側で吸収する（`//` 等の多重スラッシュは
-  path 混同攻撃面として拒否のまま）
+- **IP literal hosts** (`127.0.0.1` / `[::1]` in the local fixture)
+  cannot be IDNA-encoded. Pass numeric hosts through without IDNA;
+  wrap IPv6 in `[...]` at origin.
+- **Root `/` and single trailing slash** are emitted normally by
+  browsers, but the http connector's segment normalization rejects
+  them as empty segments. Absorb this on the browser side before
+  matching (multi-slashes like `//` still reject as a path
+  confusion attack surface).
 
-### smoke の運用上の位置づけ（レビュー指摘の受容）
+### Operational positioning of smoke (accepting review feedback)
 
-セキュリティ中核の実ブラウザ接合部（interception の実 abort・form login の実捕捉・
-teardown/udd purge・誤成功系変異の実拒否 E2E）は `BROWSER_EXTRACT_SMOKE` ゲート下に**のみ**
-存在する。常時実行テストは判定ロジックを fake 相手に検証するが、Playwright 配線の退行は
-smoke でしか検出できない。**browser 系統に触れる変更をコミットする前は smoke をローカル実行
-すること**（CI は本リポジトリに未整備。実行手順は AGENTS.md「Browser Extract」節）。
+The security-core real-browser interfaces (real interception
+abort, real form-login capture, teardown/udd purge, real E2E
+rejection of false-success mutations) exist **only** under the
+`BROWSER_EXTRACT_SMOKE` gate. Always-on tests verify decision
+logic against fakes, but Playwright wiring regressions are only
+detectable by smoke. **Before committing changes that touch the
+browser system, run smoke locally** (CI is not set up in this
+repo; procedure lives in the "Browser Extract" section of
+AGENTS.md).
 
-### catalog 作成者向けの footgun 注記
+### Catalog-author footgun notes
 
-- `account.origin` は**素の文字列一致**で照合される（request 側だけが正規化される）。
-  origin は小文字・default port（:443/:80）省略で書くこと — 大文字や `:443` 明示は
-  正当なリクエストを誤ブロックする（fail-closed 方向なので事故だが漏れではない）
-- `origin_allowlist` の `resource_type` に列挙されない同一 origin のリソース
-  （script / stylesheet / image 等）も abort される。実ページが必要とする resource type を
-  列挙しないと画面が壊れる（doctor / smoke で顕在化する）
+- `account.origin` matches by **plain string equality** (only the
+  request side is normalized). Write origin in lowercase with the
+  default port (:443 / :80) omitted — uppercase or explicit `:443`
+  will falsely block legitimate requests (fail-closed direction —
+  accident, not leak).
+- Same-origin resources not enumerated under `origin_allowlist`'s
+  `resource_type` (script / stylesheet / image, etc.) also abort.
+  Failing to enumerate the resource types the real page needs
+  breaks the screen (surfaces in doctor / smoke).
 
-### supply chain 注記
+### Supply-chain notes
 
-chromium バイナリは Playwright の公式 CDN（`playwright.download.prss.microsoft.com` 系）から
-取得され、その完全性検証は Playwright 自身に依存する（pip パッケージの hash 検証とは別系）。
-pip 側は `requirements-browser.txt` の major.minor 上限固定で供給を絞るが、ブラウザバイナリの
-真正性は CDN + Playwright の検証に委ねる（本 guide に記録して受容）。
+Chromium binaries are fetched from Playwright's official CDN
+(`playwright.download.prss.microsoft.com` family). Their integrity
+verification depends on Playwright itself (separate from pip
+package hash verification). pip narrows supply with the
+`major.minor` upper bound in `requirements-browser.txt`; browser-
+binary authenticity is entrusted to the CDN + Playwright's
+verification (recorded here and accepted).

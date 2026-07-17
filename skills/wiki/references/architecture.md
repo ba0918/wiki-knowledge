@@ -1,68 +1,78 @@
 # Architecture
 
-## 設計思想
+## Design principles
 
-LLM Wiki Knowledge Base は3つの層で構成される。
+The LLM Wiki Knowledge Base has three layers.
 
-### 3層構造
+### Three-layer structure
 
-| 層 | 場所 | 責務 | 変更者 |
-|----|------|------|--------|
-| Source 層 | `{wiki_root}/raw/` | 不変のソースドキュメント | 人間（キュレーション） |
-| Knowledge 層 | `{wiki_root}/concepts/` | 相互参照付き Wiki 記事 | LLM（compile/promote） |
-| Output 層 | `{wiki_root}/outputs/` | Query 回答・Lint レポート・派生グラフ | LLM / scripts |
+| Layer | Location | Responsibility | Owner |
+|---|---|---|---|
+| Source | `{wiki_root}/raw/` | Immutable source documents | Human (curation) |
+| Knowledge | `{wiki_root}/concepts/` | Cross-referenced wiki articles | LLM (compile / promote) |
+| Output | `{wiki_root}/outputs/` | Query answers, lint reports, derived graph | LLM / scripts |
 
-**原則**: Source 層は immutable。LLM は Knowledge 層と Output 層のみ変更する。
+**Principle**: the Source layer is immutable. The LLM only modifies the
+Knowledge and Output layers.
 
-### Knowledge 層内の派生関係（concepts → inventory → graph）
+### Derivation inside the Knowledge layer (concepts → inventory → graph)
 
-Knowledge 層は **source of truth（concepts）→ 派生インデックス（inventory）→ 派生グラフ（graph）** の単方向派生で構成される。
+The Knowledge layer flows in one direction: **source of truth
+(concepts) → derived index (inventory) → derived graph (graph)**.
 
 ```
-concepts/*.md   (source of truth — 人間/LLM が編集)
+concepts/*.md   (source of truth — edited by humans / the LLM)
      │
      ▼ parse (lib/inventory.py)
-ArticleInventory  (派生インデックス — in-memory のみ、永続化しない)
+ArticleInventory  (derived index — in-memory only, not persisted)
      │
      ▼ graph_gen.py
-outputs/graph.json  (派生グラフ — nodes / edges / metadata.dangling_links)
+outputs/graph.json  (derived graph — nodes / edges / metadata.dangling_links)
      │
-     ├─▼ lint-wiki.py --use-graph (デフォルト ON)
-     │  Lint Findings  (dead_link / orphan は graph layer 経由で検出)
+     ├─▼ lint-wiki.py --use-graph (ON by default)
+     │  Lint Findings  (dead_link / orphan detected via the graph layer)
      │
-     └─▼ query_retrieve.py (query の retrieval pre-pass)
-        候補リスト  (seed キーワードマッチ → 両方向1ホップ展開 → trust 注釈)
+     └─▼ query_retrieve.py (query retrieval pre-pass)
+        Candidate list  (seed keyword match → one-hop expansion in both directions → trust annotation)
 ```
 
-graph layer の役割は2つ: **(1) dead_link / orphan を一箇所で計算する基盤**（lint-wiki.py は inventory を再走査せず `outputs/graph.json` の `metadata.dangling_links` と `edges` から派生情報を読むため、検出ロジックの二重実装が排除される）、**(2) query retrieval の展開基盤**（query_retrieve.py が edges から outbound + **backlink** の両方向に候補を展開する。backlink 方向は記事本文からは見えず、graph だけが提供できる）。
+The graph layer serves two purposes: **(1) a single place to compute
+`dead_link` / `orphan`** (lint reads `metadata.dangling_links` and
+`edges` from `outputs/graph.json` instead of walking the inventory
+again — this removes the double implementation of the detection logic),
+and **(2) an expansion substrate for query retrieval** (`query_retrieve.py`
+walks `edges` for outbound **and backlink** expansion; backlinks are
+invisible from article bodies — only the graph provides them).
 
-### 4相パイプライン（派生生成ステップを含む）
+### Four-phase pipeline (with the derivation step)
 
 ```
 Ingest → Compile → graph_gen → Lint → (back to Ingest)
                        ▲
-                       └ compile の後、lint の前に必ず実行する派生生成ステップ
+                       └ derivation step; runs after compile and before lint
 ```
 
-`graph_gen` は派生生成ステップであり、独立フェーズではなく compile と lint の橋渡しとして位置付ける。`wiki cycle` は orchestrator として `compile → graph_gen → lint` を明示的に呼び出す。
+`graph_gen` is a derivation step — not an independent phase. It sits
+between compile and lint. `wiki cycle` is the orchestrator that
+explicitly calls `compile → graph_gen → lint`.
 
-### 4相パイプライン
+### Four phases
 
 ```
 Ingest → Compile → Query → Lint → (back to Ingest)
 ```
 
-| Phase | 入力 | 出力 | トリガー |
-|-------|------|------|---------|
-| Ingest | ファイル / URL | `raw/` にステージング | ユーザがソースを追加 |
-| Compile | `raw/` のソース | `concepts/` に記事生成 | Ingest 後 or ユーザ指示 |
-| graph_gen | `concepts/*.md` | `outputs/graph.json` | compile の後・lint の前（派生生成ステップ） |
-| Query | ユーザの質問 | 回答（→ promote で記事化も） | ユーザが質問 |
-| Lint | Wiki 全体 + `outputs/graph.json` | レポート + 修復提案 | 定期 or ユーザ指示 |
+| Phase | Input | Output | Trigger |
+|---|---|---|---|
+| Ingest | File / URL | Staged under `raw/` | User adds a source |
+| Compile | Sources under `raw/` | Articles under `concepts/` | After ingest, or on demand |
+| graph_gen | `concepts/*.md` | `outputs/graph.json` | After compile, before lint (derivation step) |
+| Query | User question | Answer (optionally promoted to an article) | User asks |
+| Lint | Whole wiki + `outputs/graph.json` | Report + fix suggestions | Periodic, or on demand |
 
-### パス解決
+### Path resolution
 
-全スキルは `AGENTS.md`（または `CLAUDE.md`）から `wiki_root` を取得する。
+Every skill picks `wiki_root` up from `AGENTS.md` (or `CLAUDE.md`).
 
 ```yaml
 ---
@@ -70,73 +80,111 @@ wiki_root: .wiki
 ---
 ```
 
-Wiki 内のパスは全て `{wiki_root}` からの相対パス。
+All wiki-internal paths are relative to `{wiki_root}`.
 
-## Schema 体制（v0 = schema-of-record / v1 = standby）
+## Schema regime (v0 = schema-of-record / v1 = standby)
 
-裁定（2026-07-07）: v0 を schema-of-record と正式宣言。v1 は「concepts/ に再導出不能な状態を書き込む最初の機能」が来るまで standby。5リポジトリ実適用は v0 で進めてよい。
+Decision (2026-07-07): v0 is formally declared schema-of-record. v1
+stays on standby until "the first feature that writes state to
+concepts/ that cannot be re-derived from raw/" lands. Five-repo real
+adoption may proceed on v0.
 
-- **v0（`{wiki_root}/schema/page-template.json`）が schema-of-record。** 全記事・全消費側スクリプト・compile 手順・wiki-init テンプレートは v0 に準拠する
-- **v1（`page-template-v1.json` + `lib/` の Article 集約・migrations 一式）は採用トリガー付きの standby 資産。** 削除しない。ただし新規記事に使わない
-- **採用トリガー（不変条件）**: concepts/ に「raw/ から再導出できない状態」を書き込む最初の機能（`wiki review resolve` / claim 仲裁 / 出典なし promote 等)は、v1 migration（migrate.py CLI + 全記事昇格 + 消費側の v1 対応）と同一サイクルでリリースしなければならない
-- **根拠の要旨**: concepts/ は raw/ から再コンパイル可能な派生物（本ドキュメント3層構造の原則どおり）。真に不可逆なのは raw/ であり、raw フロントマターの revision 固定は repo-ingest が実装済み。v1 最大主義が守る対象（再導出不能な記事状態）は、それを書き込む機能が現れるまで存在しない
-- **見張り**: lint の `schema_version_unadopted` チェック（format_violations 系、error）が v1 記事の混入を検出する
+- **v0 (`{wiki_root}/schema/page-template.json`) is the
+  schema-of-record.** Every article, every consumer script, the
+  compile procedure, and the wiki-init templates all comply with v0.
+- **v1 (`page-template-v1.json` + `lib/`'s Article aggregate + the
+  full `migrations/` set) is a standby asset with an adoption trigger.**
+  Do NOT delete it. But do NOT use it for new articles.
+- **Adoption trigger (invariant)**: the first feature that writes
+  "state to concepts/ that cannot be re-derived from raw/" — think
+  `wiki review resolve`, claim arbitration, source-less promote —
+  must ship in the same cycle as the v1 migration (a `migrate.py` CLI
+  + full-article promotion + consumer-side v1 support).
+- **Rationale**: `concepts/` is a re-derivable output of `raw/`
+  (matching the three-layer principle above). What is truly
+  irreversible is `raw/` — and raw frontmatter revision pinning is
+  already implemented by repo-ingest. The thing v1 maximalism
+  protects (irrecoverable article state) does not exist until a
+  feature arrives that writes it.
+- **Watchdog**: the lint `schema_version_unadopted` check
+  (`format_violations`, error) catches v1 articles that slip in.
 
-### lib/ の地位区分
+### `lib/` status classification
 
-| 区分 | モジュール | 状態 |
-|------|-----------|------|
-| 現役（共有 service 層） | `path_validator.py` / `clock.py` / `file_lock.py` / `lib/domain/repo.py` / `repo_clone.py` | repo_ingest が消費中。今後の決定論スクリプトもここを使う |
-| standby（トリガーで起動） | `lib/domain/types.py` の Article 集約 / `schema.py` の v1 load・dump / `wiki_repo.py` / `migrations/` 一式 | テスト完備のまま待機。トリガー発火時に再検証して採用 |
+| Class | Modules | State |
+|---|---|---|
+| Current (shared service layer) | `path_validator.py` / `clock.py` / `file_lock.py` / `lib/domain/repo.py` / `repo_clone.py` | Consumed by `repo_ingest`. Future deterministic scripts use these. |
+| Standby (activated on trigger) | `lib/domain/types.py` Article aggregate / `schema.py` v1 load-dump / `wiki_repo.py` / all of `migrations/` | Full test suite, on standby. Re-verify and adopt when the trigger fires. |
 
-## 既存 Wiki への graph layer 後付け移行
+## Retrofit migration: adding the graph layer to an existing wiki
 
-graph layer 導入前に作成された Wiki（`{wiki_root}/.gitignore` や `outputs/graph.json` が存在しない状態）を移行する場合、以下の手順を一度だけ実行する。新規 `wiki init` で作成された Wiki では不要。
+If a wiki was created before the graph layer arrived (no
+`{wiki_root}/.gitignore`, no `outputs/graph.json`), run this once. New
+wikis created via `wiki init` do not need this.
 
-### 手順
+### Procedure
 
-1. **`.gitignore` の配置**
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/wiki-gitignore-template` を `{wiki_root}/.gitignore` にコピー
-   - 既に `{wiki_root}/.gitignore` が存在する場合は、テンプレート内の各行について未記載のものだけを追記（merge 方式）。最低限以下の3行が含まれていればよい:
+1. **Place `.gitignore`**
+   - Copy
+     `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/wiki-gitignore-template`
+     to `{wiki_root}/.gitignore`.
+   - If one already exists, append only the missing lines (merge).
+     At minimum, these three lines must be present:
      ```
      outputs/querylog.jsonl
      outputs/inventory.json
      outputs/graph.json
      ```
-2. **graph 初回生成**
+2. **Generate the graph for the first time**
    ```bash
    python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}
    ```
-   `outputs/graph.json` が生成される。`.gitignore` 先行配置により誤コミットを防ぐ。
-3. **以降の運用**
-   - `wiki cycle` は `compile → graph_gen → lint` を自動で回すので追加操作は不要
-   - 単体 lint 実行時も `lint-wiki.py --use-graph`（デフォルト ON）が `outputs/graph.json` を参照する
-   - graph 再生成が必要になったら `lint-wiki.py --auto-graph` または `graph_gen.py` を直接実行
+   Placing `.gitignore` first prevents accidental commits.
+3. **From here on**
+   - `wiki cycle` runs `compile → graph_gen → lint` automatically.
+   - Standalone lint reads `outputs/graph.json`
+     (`lint-wiki.py --use-graph` — ON by default).
+   - To regenerate the graph, run `lint-wiki.py --auto-graph` or
+     `graph_gen.py` directly.
 
-### 注意
+### Watch out
 
-- 手順1（`.gitignore` 配置）を飛ばして手順2を先に実行すると、`outputs/graph.json` が git index に入ってしまう可能性がある。必ず `.gitignore` を先に配置すること
-- 既に `outputs/` 配下の派生ファイルがコミットされている場合は `git rm --cached outputs/graph.json outputs/inventory.json outputs/querylog.jsonl` で index から外す
+- If you skip step 1 and go straight to step 2, `outputs/graph.json`
+  may end up in the git index. Always place `.gitignore` first.
+- If derived files under `outputs/` are already committed, remove
+  them with
+  `git rm --cached outputs/graph.json outputs/inventory.json outputs/querylog.jsonl`.
 
 ## Backlink Audit
 
-Compile / Promote 時の必須ステップ。新記事を追加したら、既存記事を走査して双方向リンクを確立する。
+Required step in `compile` / `promote`. After adding a new article,
+walk the existing articles and establish bidirectional links.
 
-なぜ必須か: 一方向リンクのみだと Wiki が blog に退化する。双方向リンクがあることで、どの記事からでも関連情報に辿り着ける。
+Why required: one-directional links degrade the wiki into a blog.
+Bidirectional links let you reach related information from anywhere.
 
-### 手順
+### Procedure
 
-1. 新記事のタイトル・タグ・キーワードを抽出
-2. `{wiki_root}/concepts/` 内の全記事を `grep` で走査
-3. 関連性が高い既存記事に `[[new-slug]]` リンクを追加
-4. 既存記事の `related` フロントマターにも追加
+1. Extract title / tags / keywords from the new article.
+2. `grep`-walk every article under `{wiki_root}/concepts/`.
+3. Add `[[new-slug]]` to strongly-related existing articles.
+4. Add the same to the existing article's `related` frontmatter.
 
-## Wikilink Rendering（GitHub 互換併記）
+## Wikilink rendering (GitHub-compatible companion)
 
-GitHub Flavored Markdown は `[[slug]]` 記法を解釈しないため、`.wiki/concepts/*.md` を GitHub Web UI / PR レビューで開いた際にリンクを踏めない。本プロジェクトでは **併記方式**（[[wikilink-conversion-strategies]] 戦略 3）を採用し、`[[slug]]` を `[[slug]] ([↗](slug.md))` に自動変換する。
+GitHub Flavored Markdown does not parse `[[slug]]`, so `.wiki/concepts/*.md`
+loses its links when viewed in the GitHub Web UI or PR review. This
+project uses the **companion form**
+([[wikilink-conversion-strategies]] strategy 3) and rewrites `[[slug]]`
+to `[[slug]] ([↗](slug.md))` automatically.
 
-- 変換器: `skills/wiki/scripts/wikilink_render.py`（pure 関数 `render_wikilinks(text)` + 薄い CLI 層）
-- 実行タイミング: `wiki compile` の最終ステップ（自動）。手動実行は `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/wikilink_render.py --write .wiki/concepts/`
-- Idempotent: 既に併記済みの行はスキップ。複数回実行しても結果は同じ
-- 検証: `lint-wiki.py` の `wikilink_rendering` チェック（warning）が剥がれた wikilink を検出
-- code-fence / inline-code 内は `lib/inventory.py` と同じ regex で除外。チルダフェンス `~~~` は既知の限界
+- Converter: `skills/wiki/scripts/wikilink_render.py` (pure
+  `render_wikilinks(text)` + a thin CLI).
+- Runs at: final step of `wiki compile` (automatic). Manual invocation:
+  `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/wikilink_render.py --write .wiki/concepts/`.
+- Idempotent: lines already in companion form are skipped. Running
+  multiple times is safe.
+- Verification: the lint `wikilink_rendering` check (warning) catches
+  bare `[[wikilink]]`s.
+- Code fences and inline code are excluded using the same regex as
+  `lib/inventory.py`. Tilde fences (`~~~`) are a known limitation.
