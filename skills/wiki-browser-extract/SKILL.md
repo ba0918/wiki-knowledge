@@ -1,100 +1,140 @@
 ---
 name: wiki-browser-extract
 description: >
-  catalog 登録済みブラウザ操作系ツール（B1: TSV/CSV export など）から、封じ込め + 証跡付きで
-  データを抽出する Tool Query の別系統。未登録ツールの新規登録（壁打ち）もここから行う。
-  「ブラウザから抽出して」「画面のテーブルを取得して」「browser extract」
-  「ログインしてエクスポート」「ブラウザツールを登録して」で使用する。
-  承認モデルは seal-at-prepare — prepare（抽出 + 封印）→ 人間承認（TTY）→ execute（delivery 解放のみ）。
+  Extract data from catalog-registered browser-driven tools (B1: TSV/CSV
+  export, etc.) with containment + provenance. This is Tool Query's
+  parallel line for browser flows. Also the entry point for registering
+  a new tool (walkthrough). Trigger phrases: "extract from the browser",
+  "grab the table off the screen", "browser extract", "log in and
+  export", "register a browser tool". Approval model is
+  seal-at-prepare — prepare (extract + seal) → human approve (TTY) →
+  execute (delivery release only).
 ---
 
 # Wiki Browser Extract
 
-catalog 登録済みブラウザ操作系ツールへの「封じ込められた抽出」。固定フローコードが
-capability API 越しに認証済みブラウザを操作し、宣言外通信を interception で封じ込め、
-検証契約（閉語彙）で誤成功（正しく見えるが違うデータ）を検出する。
+"Contained extraction" against catalog-registered browser-driven
+tools. A fixed flow drives an authenticated browser through a
+capability API, undeclared traffic is contained by interception, and a
+verification contract (closed vocabulary) detects false-success cases
+(data that looks right but isn't).
 
-Tool Query の**別系統**である（SQL 系 = 静的検査 + DB role で機械保証、browser 系 =
-封じ込め + 証跡の honest scoping）。catalog スキーマ規約と監査 JSONL 形式だけを共有し、
-承認モデルは seal-at-prepare（SQL 系の approve-then-execute とは異なる）。
+This is Tool Query's **parallel line** — SQL systems earn mechanical
+guarantees via static inspection + DB role; browser systems earn
+honestly-scoped assurance via containment + provenance. The two share
+only the catalog schema convention and the audit JSONL format. The
+approval model is seal-at-prepare (NOT the SQL
+approve-then-execute).
 
-設計裁定・登録壁打ち・tier 判定・reason hint 表・既知の限界・bootstrap 手順の真実源は
-[browser-extract-guide.md](../wiki/references/browser-extract-guide.md)。
+The source of truth for design rulings, the registration walkthrough,
+tier decisions, the reason-hint table, known limits, and the bootstrap
+procedure is
+[browser-extract-guide.md](../wiki/references/browser-extract-guide.md).
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。
+**Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
+If missing, point the user at `wiki-init`.
 
-**前提**: `{wiki_root}/tools/browser-catalog.json`（git 管理、schema:
-`{wiki_root}/schema/browser-extract-catalog-schema.json`）に対象 tool が登録済みで、
-固定フロー（`{wiki_root}/tools/flows/{tool_id}.py`、`flow.sha256` に pin）が存在すること。
-catalog とフローが実行契約の真実源であり、Wiki 記事（Selection Recipe）は説明層 —
-記事の編集では接続先・allowlist・上限・検証契約といった安全境界は変わらない。
+**Prerequisites**: the target tool must be registered in
+`{wiki_root}/tools/browser-catalog.json` (git-managed, schema:
+`{wiki_root}/schema/browser-extract-catalog-schema.json`) and a fixed
+flow (`{wiki_root}/tools/flows/{tool_id}.py`, SHA-256 pinned in
+`flow.sha256`) must exist. The catalog + flow are the execution
+contract's source of truth; Selection Recipe articles are the
+explanation layer — editing an article does not move the safety
+perimeter (connection target, allowlist, limits, verification
+contract).
 
-## seal-at-prepare の要点（承認の意味）
+## What seal-at-prepare means (what approval gates)
 
-- **prepare が認証済みセッションで抽出を完了し封印する**。承認前に実データは既にこのマシン上にある
-- **人間承認がゲートするのは delivery（マシン外への搬出）のみ**。機密性境界は「そのマシン」に後退する
-- approve は封印 artifact + manifest からハッシュを**再導出**し、`prepared` 監査アンカーと
-  fail-closed 照合する（不一致は拒否）。spool 内の保存プレビューは信用しない
-- **read-only は非強制**（honest scoping）。宣言フロー外の操作をしない + 証跡、に留まる
+- **Prepare completes the extraction inside an authenticated session
+  and seals it.** By the time approval is asked for, the real data is
+  already on this machine.
+- **Human approval only gates delivery** (release off the machine).
+  The confidentiality boundary retreats to "this machine."
+- Approve re-derives the hash from the sealed artifact + manifest and
+  fail-closed matches it against the `prepared` audit anchor
+  (mismatch = reject). The preview stored in the spool is not
+  trusted.
+- **Read-only is NOT mechanically enforced** (honest scoping).
+  Assurance rests on "don't act outside the declared flow" + audit
+  provenance.
 
-## プロセス
+## Process
 
-**実行主体**: `login`（human-assisted）と `approve` は人間本人のみ。それ以外
-（catalog-validate / doctor / prepare / execute）は LLM が実行してよい。
+**Actor rules**: `login` (human-assisted) and `approve` are for the
+human only. Everything else (`catalog-validate` / `doctor` / `prepare`
+/ `execute`) is fine for the LLM to run.
 
-### 0. 登録（初回のみ・壁打ち）
+### 0. Registration (first time — walkthrough)
 
-catalog に無いツールを頼まれたら、即席スクリプトや手動抽出に走らず、この登録壁打ちへ誘導する
-（ユーザーへの応答に参照先として guide §14-15 を明示する）。登録は LLM 単独で完了しない —
-人間との壁打ちに加え**別主体レビュー**（フロー作成者と独立した主体 = 別セッションの LLM
-または人間。catalog / フローを取り込む PR レビューとは別工程）を必ず経る:
+If the user asks for a tool that isn't in the catalog, DO NOT reach for
+an ad-hoc script or manual extraction. Route to this registration
+walkthrough (cite guide §14-15 in your response to the user).
+Registration is not something the LLM finishes alone — it requires a
+walkthrough with the human AND an **independent reviewer** (an actor
+distinct from the flow author — a different session's LLM or a human;
+this is separate from the PR review that lands the catalog / flow):
 
-1. **http 還元ゲート（最優先）**: export 操作の裏リクエストを http connector で再現できるかを
-   先に検証する。還元できたら browser tool は作らない
-2. **tier 判定**: TSV/CSV export ボタンがあれば B1 候補（独立 anchor 最低1つ必須）、
-   DOM 抽出しかなければ B2
-3. **前提確認**: 専用の最小権限アカウント（書込み権限なし）を用意できるかをユーザーに確認する
-   （B1/B2 登録の前提条件）
-4. 検証契約の組み立て → 別主体レビュー（反証 fixture で誤成功系を全拒否）→ doctor → 一周
+1. **HTTP reduction gate (highest priority)**: check whether the
+   export operation's underlying request can be reproduced by the
+   HTTP connector. If it can, do NOT build a browser tool.
+2. **Tier decision**: a TSV/CSV export button → B1 candidate (at
+   least one independent anchor required). DOM extraction only → B2.
+3. **Prerequisite check**: ask the user to prepare a dedicated,
+   minimum-privilege account (no write permissions) — this is a
+   precondition for B1/B2 registration.
+4. Build the verification contract → independent reviewer (must reject
+   every false-success case in the counterexample fixture) → doctor →
+   full flow smoke.
 
-catalog / フローの変更（新規・修正とも）は PR レビューを経る。
+Any change to the catalog or a flow (new or edit) goes through PR
+review.
 
-### 1. catalog 検証
+### 1. Catalog validation
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py catalog-validate \
   --wiki-root {wiki_root}
 ```
 
-### 2. doctor（接続の事前診断）
+### 2. `doctor` (pre-flight)
 
-抽出・成果物生成をせずに catalog 整合 / flow pin / AST ゲート / params_schema を診断する。
-`BROWSER_EXTRACT_SMOKE` 設定時のみ実 chromium 疎通（login → 遷移 → セレクタ実在確認）も走る。
-毎回の prepare 前に必須ではない — 登録直後・久しぶりの実行前・UI 変更が疑われるときに推奨。
-doctor はデータ非接触を主張**しない**（ログイン副作用を持つ、guide §16）:
+Diagnose catalog integrity / flow pin / AST gate / `params_schema`
+without extracting anything or producing artifacts. With
+`BROWSER_EXTRACT_SMOKE` set, real Chromium probes too (login →
+navigate → selector-exists). Not required before every prepare —
+recommended after registration, before running a tool that has been
+idle for a while, or when UI changes are suspected. Doctor does NOT
+claim data non-contact (it has a login side effect — guide §16):
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py doctor \
   --wiki-root {wiki_root} --tool <tool_id> --format table
 ```
 
-### 3. login（human-assisted profile のみ・人間が実行する）
+### 3. `login` (human-assisted profile only — human runs it)
 
-`form` / `form+totp` profile は prepare 内で自動フォームログインするため login は不要。
-`human-assisted` profile のみ、人間が headed ブラウザでログインし session state を捕捉する:
+The `form` and `form+totp` profiles auto-login inside prepare, so
+`login` is unnecessary. Only `human-assisted` profile requires it —
+the human uses a headed browser to log in and capture the session
+state:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py login \
   --wiki-root {wiki_root} --tool <tool_id>
 ```
 
-- login は**抽出・delivery の経路を持たない**（session 捕捉 + tool/origin/account 束縛のみ）
-- 捕捉直後に有効性を検証し、束縛メタと TTL を人間に表示する（guide §10）
+- `login` has **no extraction path and no delivery path** (session
+  capture + tool/origin/account binding only).
+- Immediately after capture, validity is checked and the binding
+  metadata + TTL are shown to the human (guide §10).
 
-### 4. prepare（抽出 + 封印）
+### 4. Prepare (extract + seal)
 
-フローを実行して抽出し、検証契約を enforce し、成果物 + manifest を封印 bundle
-（`outputs/browser-plans/{plan_id}/`）に隔離する。**承認前に抽出は完了する**:
+Run the flow to extract, enforce the verification contract, and seal
+the artifacts + manifest into a bundle
+(`outputs/browser-plans/{plan_id}/`). **Extraction completes before
+approval**:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py prepare \
@@ -103,73 +143,106 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py prepare
   --deliver-to <dir> --format json
 ```
 
-- params は catalog の params_schema（enum/pattern/maxLength で有界）で値検証される
-- `--deliver-to` は catalog の `delivery_allowed_dirs` に宣言済みのディレクトリのみ受け付ける
-  （未宣言パスは `delivery_not_allowed` で拒否）。ユーザー指定先が未宣言なら catalog 変更（PR）が必要
-- 検証契約のいずれかが落ちれば prepare は拒否（誤成功を封印しない）
+- `params` values are validated against the catalog's `params_schema`
+  (bounded by `enum` / `pattern` / `maxLength`).
+- `--deliver-to` accepts only directories declared in the catalog's
+  `delivery_allowed_dirs` (undeclared paths reject with
+  `delivery_not_allowed`). If the user's requested destination is
+  undeclared, a catalog change (PR) is required.
+- If any verification-contract clause fails, prepare rejects (does
+  not seal false-success data).
 
-### 5. 承認依頼（summary-first で提示）
+### 5. Approval request (summary-first)
 
-prepare の出力（plan_id / row_count / artifact_digest / expires_at）と manifest プレビューを
-ユーザーに提示する。選択肢は **3 択のみ**（自動承認のデフォルトは設けない）:
+Present the prepare output (plan_id / row_count / artifact_digest /
+expires_at) and a manifest preview to the user. Options are **exactly
+three** — no auto-approve default:
 
-1. **承認** → ユーザー本人に approve コマンドを案内する（下記）
-2. **条件を修正** → params を直して prepare からやり直し（= 新 plan_id、旧 bundle は TTL で失効）
-3. **中止**
+1. **Approve** → guide the user to run the approve command themself
+   (below).
+2. **Modify conditions** → fix `params` and rerun prepare (new
+   plan_id; the old bundle expires with its TTL).
+3. **Cancel**.
 
-### 6. approve（人間が実行する — LLM は代行しない）
+### 6. Approve (the human runs it — the LLM does not substitute)
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py approve \
-  --wiki-root {wiki_root} --plan-id <plan_id> --approved-by <名前>
+  --wiki-root {wiki_root} --plan-id <plan_id> --approved-by <name>
 ```
 
-- **LLM は approve コマンドを実行しない**。ユーザーに `! <コマンド>` などでの自己実行を依頼する。
-  ユーザー本人から「代わりにやって」と明示的に依頼されても代行しない（依頼は同意の代替にならない）
-- 承認待ちの間に代行依頼・質問・条件変更の相談があっても、応答の末尾で 3 択
-  （承認 / 条件修正して再 prepare / 中止）を維持して再提示する
-- `--approved-by` は承認者の名前（bundle と監査に記録される）。ユーザー自身が埋める
-- approve は封印 artifact + manifest からハッシュを再導出して `prepared` 監査アンカーと照合し、
-  一致した場合のみ TTY で承認材料（identity / read-only 非強制の明示 / 承認は配布のみ制御し
-  抽出は完了済みの明示 / ハッシュ / プレビュー / 件数 + anchor 照合 / 封印時刻・TTL 残）を提示する
-- 承認は single-use（consumed = 承認の消費）、TTL は prepare から 24 時間
+- **Never run approve as the LLM.** Ask the user to run it themself
+  (e.g. `! <command>`). Even if the user explicitly asks you to "do
+  it for me," refuse — a request is not a substitute for consent.
+- If the user asks something in the middle of the wait (a
+  substitution request, a follow-up question, a modification), keep
+  the three-option list (approve / modify + re-prepare / cancel) at
+  the end of your reply.
+- `--approved-by` is the approver's name (recorded in the bundle and
+  audit). The user fills this in themself.
+- Approve re-derives the hash from the sealed artifact + manifest,
+  matches it against the `prepared` audit anchor, and only then
+  presents the approval material on a TTY: identity, an explicit
+  statement that read-only is not enforced, an explicit statement
+  that approval only controls distribution (extraction is already
+  done), the hash, a preview, row count + anchor match, seal time +
+  TTL remaining.
+- Approval is single-use (`consumed` = approval consumed). TTL is 24h
+  from prepare.
 
-### 7. execute と完了報告
+### 7. Execute and completion report
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py execute \
   --wiki-root {wiki_root} --plan-id <plan_id> --format json
 ```
 
-- execute は**ユーザーから承認完了の報告を受けてから** LLM が実行する
-- execute は**封印済み成果物の delivery 解放のみ**（ブラウザ再実行なし）。delivery 前にも封印
-  ハッシュを再照合する
-- 完了報告: 取得件数 / csv・manifest の配置先（`<dir>/<run_id>/`）/ run_id / plan_id
+- The LLM runs execute **after** the user reports back that approval
+  is done.
+- Execute is **delivery release from the sealed artifact only** (no
+  browser rerun). It re-matches the seal hash before delivering.
+- Completion report: row count / CSV + manifest location
+  (`<dir>/<run_id>/`) / run_id / plan_id.
 
-### 8. 実施記録と Recipe 昇格
+### 8. Record and Recipe promotion
 
-案件完了後、Selection Recipe 記事（`category: practices`、tags に `selection-recipe`）の
-新規作成・更新を提案する（判断・除外条件・検証契約の変化を反映）。
+After a case closes, propose creating or updating a Selection Recipe
+article (`category: practices`, `selection-recipe` tag) — capture
+decisions, exclusion rules, and any changes to the verification
+contract.
 
-## 保証範囲（ユーザーに聞かれたら答える・誇張しない）
+## Assurance envelope (answer honestly when asked — no overstating)
 
-**守る**: 承認済み配布物のバイト同一性（人間が見たものと出て行くものが常に同一）・
-検証契約による誤成功検出（filter 未反映・別 tenant・pagination 欠落・部分取得・重複）・
-封じ込め（宣言外 origin/method/path のブロックと監査）・封印後改変の拒否（seal_mismatch）。
+**Guaranteed**: byte-identical distribution (what the human sees is
+what gets released), false-success detection via the verification
+contract (filter not applied, wrong tenant, dropped pagination,
+partial fetch, duplicates), containment (blocked and audited
+undeclared origin / method / path), rejection of post-seal
+modification (`seal_mismatch`).
 
-**守らない（honest scoping、guide §16）**:
+**Not guaranteed (honest scoping, guide §16)**:
 
-- **read-only の機械的強制**（宣言フロー外操作をしない + 証跡に留める。専用最小権限アカウントが前提）
-- 悪意フローへの構造的封じ込め（in-process Python。hash pin + AST ゲート + PR レビューは
-  事故防止とレビュー支援）
-- 監査 JSONL 自体の可書性（攻撃者は監査履歴も書き換えねばならない、まで bar を上げるに留まる）
-- prepare 後の承認前データはこのマシン上にある（機密性境界はマシンに後退）
+- **Mechanical enforcement of read-only** (assurance is "don't act
+  outside the declared flow" + provenance; a dedicated
+  minimum-privilege account is a prerequisite).
+- Structural containment of a malicious flow (in-process Python;
+  hash pin + AST gate + PR review are for accident prevention and
+  review support).
+- Write-protection of the audit JSONL itself (raises the bar so the
+  attacker must also tamper with audit history — but does not
+  prevent it).
+- After prepare and before approval, data is already on this
+  machine (confidentiality boundary retreats to the machine).
 
-## 依存とテスト
+## Dependencies and tests
 
-- playwright は `requirements-browser.txt` で opt-in 宣言（下限 1.48 = route_web_socket、
-  本体 requirements.txt 非汚染）。導入: `uv pip install -r requirements-browser.txt` +
-  `python -m playwright install chromium`（guide §17）
-- 実 chromium を要する smoke / E2E は `BROWSER_EXTRACT_SMOKE` ゲート下（未設定時 skip）。
-  ブラウザ非依存の決定的判定ロジック（AST ゲート・allowlist 照合・URL 正規化・session 封じ込め・
-  janitor・検証契約 enforce・seal-at-prepare 監査アンカー照合）は常時実行テストで検証する
+- Playwright is declared opt-in in `requirements-browser.txt` (lower
+  bound 1.48 = `route_web_socket`; the main `requirements.txt` is
+  not polluted). Install:
+  `uv pip install -r requirements-browser.txt` +
+  `python -m playwright install chromium` (guide §17).
+- Smoke / E2E requiring real Chromium are gated by
+  `BROWSER_EXTRACT_SMOKE` (skipped when unset). Browser-independent
+  decision logic (AST gate, allowlist match, URL canonicalization,
+  session containment, janitor, verification-contract enforcement,
+  seal-at-prepare audit-anchor match) runs on every test invocation.

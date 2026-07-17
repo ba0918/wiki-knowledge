@@ -1,220 +1,318 @@
-# ユーザーサポート裏付け調査ガイド
+# User Support Investigation Guide
 
-> ユーザーサポートの問い合わせ（例:「対局後にイベントポイントが入らなかった」）を、
-> ユーザー ID から関連データで裏付ける調査の規範。判断の 3 層分解・レポート 5 分割様式・
-> 調査経路の優先順位・「調査不能」の定型化・匿名化還元ルールからなる。
-> **本ガイドはツール非依存である** — 具体的な調査ツールはユーザーが各環境で登録し、
-> 本規範はそのどれにも構造的に依存しない。
+> A canonical procedure for corroborating user-support inquiries (e.g.
+> "I didn't get event points after the match") from a user ID against
+> related data. Composed of: three-layer decision decomposition, a
+> five-section report shape, an evidence-route priority order, a
+> canonical form for "cannot investigate," and anonymization rules for
+> feeding results back into the wiki.
+> **This guide is tool-agnostic** — specific investigation tools are
+> registered per environment by users; this canon does not
+> structurally depend on any of them.
 
-## このガイドの位置づけ
+## Positioning
 
-問い合わせの裏付け調査は「集合知への質問」である。担当者が受け取る問い合わせは頻度が高く定型性も高いため、
-一度確立した調査手順は繰り返し再利用され、ナレッジとして蓄積するほど回転数が上がる。本ガイドはその調査を
-**再現可能な規範**として定義する。
+Support-inquiry corroboration is "a question to collective knowledge."
+Support inquiries are frequent and formulaic, so a procedure established
+once is reused repeatedly — the more it accumulates as knowledge, the
+faster the loop spins. This guide defines the procedure as **a
+reproducible canon**.
 
-規範が扱うのは 3 つである。
+The canon covers three things.
 
-1. **判断の構造** — 観測・ルール適用・バグ推定を分離する 3 層分解と、それを強制するレポート 5 分割様式
-2. **経路の選択** — どのデータ源から証拠を取るかの優先順位（登録済みツール群に対する選択ルール）
-3. **結果の定型化** — 「わかった」だけでなく「調査不能」も正式な結果として分類する
+1. **Decision structure** — three-layer separation of observation,
+   rule application, and bug inference, enforced by the five-section
+   report shape.
+2. **Route selection** — priority for where evidence is pulled from
+   (a selection rule over registered tools).
+3. **Result canonicalization** — "cannot investigate" is also a
+   first-class result, classified formally.
 
-具体的な調査ツール（どの API を叩くか、どの DB を照会するか）は**ユーザーが各環境で登録する**。
-本規範はツール名を含まず、抽象カテゴリ（公式 API 系 / データ照会系 / 画面経由系）で経路を語る。
-登録済みツールの実例への言及は、末尾の「本リポジトリでの一適用例」節にのみ隔離する。
+The specific tools (which API to call, which DB to query) **are
+registered per environment**. This canon carries no tool names — it
+speaks in abstract categories (official API family / data query family
+/ screen-mediated family). Mentions of registered tool examples are
+isolated to the "One application example in this repository" section
+at the end.
 
-## 判断の 3 層分解
+## Three-layer decomposition
 
-「pt 入ってないね」という一言の裏には、性質の異なる 3 つの判断が畳み込まれている。これを分離せずに
-断定するのが**最大の誤成功**である。
+The one-liner "points didn't come in" folds three qualitatively
+different judgments into one sentence. Failing to separate them is
+**the biggest false-success mode**.
 
-| 層 | 内容 | 誰が担うか |
+| Layer | Content | Owner |
 |---|---|---|
-| (1) 観測事実 | データ源から読み取れた生の事実（付与レコードが存在しない、等） | データ照会（人間承認のもとツールが実行） |
-| (2) 業務ルール適用 | 観測事実に業務ルールを当てる（無効試合・対象外・上限・遅延・取消などの条件） | 業務ルールの知識（記事・担当者） |
-| (3) バグ推定 | ルールで説明できない残差を「不具合の疑い」と判断する | 人間 |
+| (1) Observation | Raw facts read from a data source (no attribution record, etc.) | Data query (tool run under human approval) |
+| (2) Business rule application | Apply business rules to the observation (invalid match, out-of-scope, cap, delay, cancellation) | Business-rule knowledge (articles, staff) |
+| (3) Bug inference | The residual not explained by rules classifies as "suspected defect" | Human |
 
-**(1) だけを見て (3) に飛ぶこと**を様式で禁じる。観測事実（付与レコードなし）は、業務ルール（その対局は
-無効試合だった）を当てて初めて意味を持ち、ルールで説明できない場合にのみバグ推定へ進む。3 層のどこで
-結論が確定したかをレポートに明示する。
+**Do NOT jump from (1) to (3).** The report shape enforces this. An
+observation (no attribution record) only takes on meaning after a
+business rule (that match was invalid) is applied; only then, if no
+rule explains it, the investigation moves to bug inference. Make it
+explicit in the report at which layer the conclusion firmed up.
 
-## レポート 5 分割様式
+## Five-section report shape
 
-調査結果は二値（「バグです / バグではありません」）にしない。次の 5 区画に分割して記述する。
-様式そのものが 3 層分解を強制する装置である。
+Do NOT reduce the outcome to a binary ("bug / not a bug"). Split into
+these five sections. The shape itself is the device that enforces
+three-layer decomposition:
 
-1. **観測事実** — データ源から読み取れた生の事実。解釈を混ぜない
-2. **適用ルール** — 観測事実に当てた業務ルールと、その適用結果
-3. **推定原因** — ルールで説明できた／できなかったか。バグ推定はここにのみ書く
-4. **確信度** — 高 / 中 / 低（後述のルーブリックで定義）
-5. **不足情報** — 追加取得できれば確信度が上がる情報、または「調査不能」の分類
+1. **Observations** — raw facts read from a data source. No
+   interpretation mixed in.
+2. **Applied rules** — the business rules applied and the outcome
+   of applying them.
+3. **Inferred cause** — whether rules did or did not explain it. Bug
+   inference goes ONLY here.
+4. **Confidence** — high / medium / low (rubric below).
+5. **Missing information** — what would raise confidence if
+   available, or classification as "cannot investigate."
 
-レポートは**サポート担当者向け**であり、顧客向け回答文ではない。内部実装用語（テーブル名・内部フラグ名）は
-担当者が判断に使う範囲で残してよいが、顧客にそのまま転送される前提では書かない。
+The report is **for support staff** — not customer-facing text.
+Internal implementation terms (table names, internal flag names) may
+remain to the extent staff use them for judgment, but do NOT write it
+assuming direct forwarding to the customer.
 
-## 経路優先順位 — 証拠権威（SoT）が第一基準
+## Route priority — evidence authority (SoT) is the primary criterion
 
-調査経路は固定のツールリストではなく、**登録済みツール群に対する選択ルール**として定義する。
-「公式 API 系 / データ照会系 / 画面経由系」はアクセス手段の抽象カテゴリであり、順位そのものではない。
+The investigation route is NOT a fixed tool list — it is **a selection
+rule over the registered tool set**. "Official API family / data query
+family / screen-mediated family" are abstract access categories, NOT
+the priority itself.
 
-### 第一基準: 証拠権威 — その経路は Source of Truth にどれだけ近いか
+### Primary criterion: evidence authority — how close is this route to the Source of Truth
 
-アクセス手段の種別（API か DB か画面か）と、そのデータが**真実源（Source of Truth, SoT）**かどうかを
-混同してはならない。内部 API は内部 DB の**派生**でありうる。画面表示は API の派生でありうる。したがって
-経路の第一基準は「アクセスが楽か」ではなく、**その経路が SoT にどれだけ近いか（証拠権威）**である。
+Do NOT conflate the access method (API vs DB vs screen) with whether
+the data is a **Source of Truth (SoT)**. Internal APIs can be
+**derivations** of internal DBs. Screen displays can be derivations of
+APIs. So the primary criterion for a route is not "is access easy" but
+**how close is this route to the SoT (evidence authority)**.
 
-- SoT に最も近い経路から証拠を取る。派生ビュー（キャッシュ・集計済み画面・レプリカ）は SoT と一致するとは限らない
-- 外部サービスが確定させた事実（決済の確定など）は、自社画面の表示ではなく**そのサービスの権威ある経路**が SoT である
-- 「画面で確認できた事実」と「SoT 内部で確定した事実」を区別してレポートに記す
+- Pull evidence from the route closest to SoT. Derived views (caches,
+  aggregated screens, replicas) do not necessarily agree with SoT.
+- Facts confirmed by an external service (e.g. payment confirmation)
+  are SoT in **the service's authoritative route**, not in your own
+  screen.
+- Distinguish "confirmed on screen" from "confirmed inside SoT" in the
+  report.
 
-### tiebreaker: 最小権限でアクセスできるか
+### Tiebreaker: minimum privilege
 
-証拠権威が同等の経路が複数あるときは、**最小権限でアクセスできる経路**を選ぶ。読み取り専用・取得項目最小化で
-到達できる経路を優先し、広い権限を要する経路は避ける。
+When multiple routes are equally authoritative, pick **the route
+reachable with the least privilege**. Prefer read-only, minimum-field
+routes. Avoid routes requiring broad privileges.
 
-## バグ推定前の必須ゲート — settlement window の経過確認
+## Mandatory gate before bug inference — settlement window elapsed?
 
-非同期処理・バッチ確定を待つ前に「バグ」と断定することが**最大の偽陽性**である。イベント付与・決済確定・
-ポイント反映などは、イベント発生から確定までに待ち時間がある。この**確定待ち時間（settlement window）が
-経過しているか**をバグ推定の前提条件として必須化する。
+Concluding "bug" before waiting for asynchronous processing or batch
+confirmation is **the biggest false positive**. Event attribution,
+payment confirmation, and point application all have delays between
+event occurrence and confirmation. Elapsed time of that
+**confirmation-wait window (settlement window)** is a required
+precondition for bug inference.
 
-- 各処理種別の settlement window（例: 「対局終了から付与確定まで最大 N 分」）を把握する
-- 問い合わせ時刻・観測時刻が settlement window の内側にあるなら、結論は「処理中・再照会待ち」であってバグではない
-- タイムライン様式に settlement window 欄を設け、「起点イベント時刻 + window = 確定期限」と観測時刻を並べる
+- Know each processing kind's settlement window (e.g. "up to N minutes
+  from match end to attribution confirmation").
+- If inquiry time / observation time is inside the settlement window,
+  the conclusion is "in progress / re-check pending" — not a bug.
+- The timeline shape carries a settlement-window column: "start-event
+  time + window = confirmation deadline" placed alongside the
+  observation time.
 
-settlement window の経過を確認せずにバグ推定へ進んだレポートは、様式違反として差し戻す。
+Reports that jumped to bug inference without confirming the settlement
+window bounce back as shape violations.
 
-## 「調査不能」の定型化 — 6 分類
+## Canonical forms for "cannot investigate" — six categories
 
-「わからなかった」も正式な調査結果である。次の 6 分類のいずれかに定型化する。分類の集計そのものが、
-**API 昇格・監査ビュー新設・ツール登録**の優先度を測る計器になる。
+"Couldn't figure it out" is also a first-class result. Classify into
+one of six. The aggregation itself becomes a gauge for prioritizing
+**API promotion, audit-view creation, and tool registration**.
 
-| 分類 | 意味 | 還元先 |
+| Category | Meaning | Feedback destination |
 |---|---|---|
-| 権限不足 | 必要なデータ源へのアクセス権がない | アクセス権設計・調査専用ビュー |
-| 照合キー欠落 | 境界を跨ぐ共通キー（注文 ID・購入トークン等）が欠けており突き合わせできない | 対応表の整備 |
-| 処理中・再照会待ち | settlement window 未経過。確定前で判断保留 | 再照会（時間をおいて再調査） |
-| 登録ツール経路なし | 必要なデータ源に到達する**登録済みツールが無い** | ツール登録バックログ（第一級信号） |
-| SoT 間不一致 | 複数の SoT 級経路が食い違い、どれを正とするか判断できない | データ整合性調査・オーナー確認 |
-| retention によるデータ消失 | 保持期間を過ぎてデータが消えており復元できない | 保持ポリシー見直し |
+| Insufficient privilege | No access to the required data source | Access design; investigation-only views |
+| Missing join key | Cross-boundary common key (order ID, purchase token) missing — cannot correlate | Build a mapping table |
+| In-progress / re-check pending | Settlement window not yet elapsed; judgment on hold | Re-check (retry after some time) |
+| No registered tool route | **No registered tool** reaches the required data source | Tool registration backlog (first-class signal) |
+| SoT mismatch | Multiple SoT-grade routes disagree; cannot decide authoritative | Data-consistency investigation; owner confirmation |
+| Data expired by retention | Data has aged out and cannot be restored | Retention policy review |
 
-「登録ツール経路なし」は特に重要な**第一級信号**である。これは知識ギャップ検出（Gap Detection）を通じて
-「どのデータ源への調査ツールが不足しているか」を計測し、ツール登録の優先度に還元できる。
+"No registered tool route" is an especially important **first-class
+signal**. Via Gap Detection, it measures "which data sources lack a
+registered investigation tool" and feeds back into the tool-registration
+priority.
 
-## 境界跨ぎ調査 — 共通照合キーと基準時刻タイムライン
+## Cross-boundary investigation — common join keys and reference-time timelines
 
-複数システムを跨ぐ調査は「2 つのシステムを検索する」ではなく「**共通照合キー + 基準時刻での突き合わせ**」である。
+Cross-system investigation is NOT "search two systems in parallel" —
+it is **cross-checking via a common join key + reference time**.
 
-- **共通照合キー**: 内部ユーザー ID ↔ 注文 ID / 購入トークンの対応表が突き合わせの要。対応表そのものの
-  権限・保持・監査も調査対象に含める。キーが欠ければ「照合キー欠落」で調査不能
-- **基準時刻タイムライン**: 両境界のイベント時刻と観測時刻を 1 本の時間軸に並べる
+- **Common join key**: the internal user ID ↔ order ID / purchase
+  token mapping table is the linchpin. The mapping table itself
+  (permissions, retention, audit) is also in scope. If the key is
+  missing, the investigation is "missing join key" and cannot
+  proceed.
+- **Reference-time timeline**: align event times and observation times
+  at each boundary on a single time axis.
 
-### 時刻ハザード（必須節）
+### Time hazards (required subsection)
 
-タイムラインの各時刻は、次の 2 つを必ず明示する。曖昧なまま並べると誤った因果を読み取る。
+Every timeline entry must make these two explicit — leaving them
+ambiguous invites reading a false causality:
 
-- **TZ 正規化**: 全時刻を単一のタイムゾーン（UTC 推奨）に正規化する。ローカル時刻のまま並べない。
-  各時刻に元のタイムゾーンを併記する
-- **event-time / processing-time の区別**: 「事象が起きた時刻（event-time）」と「システムが処理・記録した
-  時刻（processing-time）」は別物である。タイムラインの各時刻に**時刻種別ラベル**（event / processing）を付す。
-  この区別を怠ると、処理遅延を事象の順序と誤読する
+- **TZ normalization**: normalize every time to a single time zone
+  (UTC recommended). Do NOT line up local times as-is. Annotate the
+  original time zone alongside each time.
+- **event-time vs processing-time distinction**: "when the event
+  happened (event-time)" and "when the system processed / recorded it
+  (processing-time)" are different things. Attach a **time-kind
+  label** (event / processing) to each timeline entry. Skipping this
+  reads processing delay as event ordering.
 
-## 確信度ルーブリック
+## Confidence rubric
 
-レポートの確信度 3 値は、独立した裏付け（corroboration）の数で定義する。
+The report's three-valued confidence is defined by the number of
+independent corroborations.
 
-| 確信度 | 定義 |
+| Confidence | Definition |
 |---|---|
-| 高 | 独立した SoT 級の証拠が **2 つ以上一致**している（corroboration あり） |
-| 中 | **単一の SoT** による裏付け（独立した第 2 の証拠はない） |
-| 低 | **間接推論のみ**（派生ビューの表示・状況証拠に留まる） |
+| High | At least **two SoT-grade** independent evidences agree (corroboration present) |
+| Medium | Supported by **a single SoT** (no independent second evidence) |
+| Low | **Indirect inference only** (screen of a derived view; circumstantial evidence) |
 
-corroboration とは、互いに独立した経路から得た証拠が同じ結論を指すことである。同じ SoT を 2 度読んでも
-corroboration にはならない。確信度は「担当者がどれだけ強く言えるか」を機械的に伝える。
+Corroboration means evidence obtained via mutually independent routes
+pointing to the same conclusion. Reading the same SoT twice is NOT
+corroboration. Confidence is a mechanical way of conveying "how firmly
+the staff member can assert it."
 
-## 二系統ログの分離
+## Two-log separation
 
-成長ループの信号源を混同しないため、2 つのログを役割で分離する。
+To avoid conflating signal sources of the growth loop, separate two
+logs by role:
 
-| ログ | 何を記録するか | 役割 |
+| Log | What it records | Role |
 |---|---|---|
-| 記事参照ログ（QueryLog） | どの記事を参照して調査手順を組んだか | ナレッジギャップ検出（Gap Detection）の入力 |
-| ツール実行ログ（監査ログ） | どのツールがいつ何を実行したか（実行の証跡） | 実行の監査・追跡 |
+| Article reference log (QueryLog) | Which articles were consulted to build the investigation procedure | Input to knowledge-gap detection (Gap Detection) |
+| Tool execution log (audit log) | Which tool ran what and when (execution provenance) | Audit / traceability of execution |
 
-この 2 つは**別系統**である。ツールの実行痕跡（誰がいつ何を照会したか）を QueryLog に書いてはならない。
-QueryLog は「どの記事が参照されたか」を蓄積し、参照されたが記事が無いトピックをギャップとして検出する
-成長ループの信号源であり、実行の証跡ではない。逆に、記事の参照事実を実行監査ログに書くのも誤りである。
+These are **different systems**. Do NOT write tool-execution traces
+(who queried what when) into QueryLog. QueryLog accumulates "which
+articles were consulted," and treats articles that were referenced but
+do not exist as gaps — it is a signal source for the growth loop, NOT
+execution provenance. Conversely, writing article-consultation facts
+into the execution audit log is also wrong.
 
-## Wiki 還元ルール — 匿名化した判断規則のみ
+## Wiki feedback rule — anonymized decision rules only
 
-調査の成果を Wiki に還元するのは、**匿名化した判断規則（クラスレベル）だけ**である。個別ケースの調査結果
-（この user_id はこうだった）は還元しない。ケース記録庫化は検索ノイズを生み、記事を信じて調査を省略した
-結論が還流すると**誤知識が自己強化**する。
+Results feed back into the wiki as **anonymized decision rules
+(class-level) only**. Do NOT feed back individual-case outcomes (this
+user_id turned out to be X). Turning the wiki into a case archive
+generates search noise, and when a conclusion flows back after
+someone trusted the article and skipped the actual investigation,
+**mis-knowledge self-reinforces**.
 
-- 還元するのは「どの分岐条件で・どの不足データがあると・どの異常が起きるか」といった判断規則のクラスレベル抽象
-- QueryLog の question / gap_topics も**クラスレベルで匿名化**する。実ユーザー ID を載せない
-- **匿名化の境界は「集合知に入る側」に引く**: 調査レポートは担当者が「誰の件を調査したか」を特定できることが
-  業務要件であるため、**実ユーザー ID・チケット ID を記載してよい**。その代わり出力先を git 管理外に限定し、
-  取得項目最小化を維持する。実 ID を Wiki 記事・QueryLog・操作ログ（log.md）へ**転記しない** — レポート（個別
-  ケースの証跡）とナレッジ（クラスレベルの集合知）で扱いを分ける
+- Feed back class-level abstractions like "under which branch condition
+  + with which missing data + what anomaly occurs."
+- QueryLog `question` / `gap_topics` must also be **class-level
+  anonymized**. Do NOT include real user IDs.
+- **Anonymization boundary is on the "entering collective knowledge"
+  side**: investigation reports need to identify "whose case was
+  investigated" as a business requirement, so **real user IDs and
+  ticket IDs may appear**. Compensate by keeping the output location
+  git-ignored and maintaining minimum-field retrieval. Do NOT
+  transcribe real IDs into wiki articles, QueryLog, or the operation
+  log (`log.md`) — report (individual-case provenance) and knowledge
+  (class-level collective knowledge) are handled differently.
 
-### 最小一般性バー
+### Minimum generality bar
 
-稀少ケース由来の過度に具体的な判断規則は、実質的にケース記録である（k-匿名性の破れ）。**複数ケースに
-適用可能な一般性**を持つ規則のみ還元する。「1 件しか該当しない条件」をそのまま規則化すると、匿名化した
-つもりでも個別ケースを指してしまう。還元前に「この規則は複数ケースに当てはまるか」を最小一般性バーとして
-問う。
+Overly specific decision rules derived from rare cases are effectively
+case records (k-anonymity broken). Feed back only rules with
+**generality that applies to multiple cases**. Turning "a condition
+that matches only one case" straight into a rule points at the
+individual case even after "anonymization." Before feedback, ask
+"does this rule apply to multiple cases?" as the minimum-generality
+bar.
 
-## 取得項目最小化と read-only 原則
+## Minimum-field retrieval and read-only principle
 
-- **read-only を大原則**とする。書き込み経路は調査に用いない
-- **取得項目最小化**: 回答に不要な機微情報（支払手段など）は取得しない。列を絞って成果物に残さない
-- **出力上限**: 一度に取得する行数に上限を設ける
-- **出口条件**: 調査専用アカウントを分離し（共有アカウントは実行主体の監査が曖昧になる）、PII テーブルは
-  直接触れず**調査専用ビュー**（必要列のみ・マスキング済み）を用意する
+- **Read-only is the top principle.** Do NOT use write paths for
+  investigation.
+- **Minimum fields**: do NOT retrieve sensitive information (e.g.
+  payment method) not needed for the answer. Narrow columns and do
+  NOT leave them in artifacts.
+- **Output caps**: cap rows retrieved per run.
+- **Exit conditions**: separate the investigation account (shared
+  accounts blur execution-actor audit). Prepare an
+  **investigation-only view** (only necessary columns, masked) rather
+  than touching PII tables directly.
 
-## 閉集合の進化ガバナンス
+## Closed-set evolution governance
 
-調査手順ナレッジは、問い合わせの文面別ではなく**不整合パターン別の閉集合**として設計する（文面は無限に
-揺れるため、文面別にすると同義の問い合わせでギャップが分裂する）。
+Design investigation-procedure knowledge as a **closed set by mismatch
+pattern** — NOT by inquiry phrasing (phrasing varies infinitely; a
+phrasing-based split fractures gaps across synonymous inquiries).
 
-新しい不整合パターンを見つけたときは、次の判断規範で「新カテゴリか variant か」を決める。
+When a new mismatch pattern is found, decide "new category or variant"
+by this rule:
 
-- **新カテゴリにする条件**: 既存分類のどれとも**調査経路・判定根拠が構造的に異なる**（当てる業務ルールも
-  照合キーも違う）
-- **既存の variant にする条件**: 調査経路・判定根拠は既存分類と同じで、**入口の症状が違うだけ**
+- **New category** when the investigation route and judgment
+  rationale are **structurally different** from every existing
+  category (different business rule applied, different join key).
+- **Variant of an existing category** when the investigation route
+  and judgment rationale match an existing category, and **only the
+  entry-symptom differs**.
 
-判断の結果（どちらにしたか・なぜか）は、該当する調査手順ナレッジ記事の中に記録する。安易にカテゴリを
-増やすと閉集合の弁別性が失われ、逆に何でも variant に押し込むと 1 記事が肥大化して調査経路が埋もれる。
+Record the decision (which one, why) inside the relevant knowledge
+article. Grow the closed set too easily and its discriminability is
+lost. Shove everything into variants and a single article balloons,
+burying the investigation route.
 
-## 実データ照会のユーザー同席ステップ
+## User co-presence steps for real-data queries
 
-credential・実案件 URL を要するステップは headless で進めない。次の段取りを固定する。
+Do NOT run steps that require credentials or a real-case URL headless.
+Fix this sequence:
 
-1. 経路優先順位（証拠権威 → 最小権限）に従って経路を選択する
-2. read-only 接続の疎通確認
-3. 調査対象（実案件 1 件）と取得計画を**提示**する
-4. **人間が承認**する（実行のゲートは常に人間。LLM は候補提示まで）
-5. 実行し、5 分割様式でレポートを出力する（出力先は git 管理外・PII を含むため）
-6. QueryLog に記録する（question・識別子は仮名化）
+1. Select the route per priority (evidence authority → minimum
+   privilege).
+2. Sanity-check the read-only connection.
+3. **Present** the target (one real case) and the retrieval plan.
+4. **Human approval** (the execution gate is always human — the LLM
+   only proposes candidates).
+5. Run; emit the five-section report (output location is
+   git-ignored — PII present).
+6. Record in QueryLog (question / identifiers anonymized).
 
 ---
 
-## 本リポジトリでの一適用例
+## One application example in this repository
 
-> ここから下は、本リポジトリ（wiki 基盤）に登録されうるツールの**一例**である。
-> 上記の規範本体はこれらのツールに依存しない。別環境では別のツールが登録される。
+> Below is **one example** of tools that could be registered against
+> this repository (a wiki substrate). The canon above does NOT depend
+> on these — other environments will register other tools.
 
-上記の抽象カテゴリは、本リポジトリでは次のように具体化されうる（あくまで一例）。
+The abstract categories above materialize as follows in this
+repository (one example only):
 
-- **公式 API 系** — 一手段として http connector（`tool-query` の http タイプ）。App Store Server API /
-  Google Play Developer API のような公式 API がこのカテゴリの典型
-- **データ照会系** — 一手段として `tool-query` の直 DB 照会（sqlite / postgres / mysql）。read-only role +
-  relation allowlist + 静的 SQL 検査 + session read-only + 出力上限の多層防御が、規範の「read-only 大原則」と
-  「取得項目最小化」を機械的に担保する例
-- **画面経由系** — 一手段として `browser-extract`。公式 API が無い自社製ツールに対する「API が生えるまでの橋」。
-  seal-at-prepare の封じ込め + 人間の TTY 承認が、規範の「実行のゲートは人間」を機械的に担保する例
+- **Official API family** — one option is the HTTP connector
+  (`tool-query`'s `http` type). App Store Server API / Google Play
+  Developer API-style official APIs are typical here.
+- **Data query family** — one option is `tool-query`'s direct DB
+  query (sqlite / postgres / mysql). The multi-layered defense
+  (read-only role + relation allowlist + static SQL gate + session
+  read-only + output caps) is an example of mechanically upholding
+  the canon's "read-only top principle" and "minimum-field
+  retrieval."
+- **Screen-mediated family** — one option is `browser-extract`. A
+  "bridge until an official API grows" for in-house tools without an
+  API. Seal-at-prepare containment + human TTY approval mechanically
+  uphold "the execution gate is human."
 
-「何をどう判断して取得するか」の説明層として、本リポジトリには Selection Recipe 記事（`selection-recipe`
-タグ）の仕組みがある。ただし本ガイドの調査手順ナレッジ（`practices` カテゴリのツール非依存記事）は、これらの
-ツール機構を**構造的前提にしない**。Selection Recipe はあくまで登録済みツールの実行契約の説明であり、
-調査規範そのものではない。
+For the explanation layer of "what to fetch and how to decide," this
+repository has the Selection Recipe mechanism (`selection-recipe`
+tag). However, the investigation knowledge in this guide (tool-agnostic
+articles under the `practices` category) does NOT structurally
+depend on these tool mechanisms. Selection Recipes describe execution
+contracts for registered tools — they are not the investigation canon
+itself.

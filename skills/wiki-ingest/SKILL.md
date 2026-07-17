@@ -1,99 +1,125 @@
 ---
 name: wiki-ingest
 description: >
-  ソースドキュメント（URL、ファイル、記事、git リポジトリ）を Wiki の raw/ にステージングする。
-  「ソースを取り込む」「ingest」「wiki に追加」「URL を wiki に入れて」「リポジトリを取り込む」で使用する。
+  Stage source documents (URLs, files, articles, git repositories) into
+  the wiki's raw/ directory. Trigger phrases: "ingest a source", "add to
+  wiki", "put this URL into the wiki", "ingest this repository".
 ---
 
 # Wiki Ingest
 
-ソースドキュメントを `{wiki_root}/raw/` にステージングする。raw/ は immutable（一度保存したら変更しない）。
+Stage source documents under `{wiki_root}/raw/`. `raw/` is immutable —
+once saved, do not modify.
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](../wiki/references/paths.md) を参照。
+**Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
+If missing, point the user at `wiki-init`. Details in
+[paths.md](../wiki/references/paths.md).
 
-## 入力
+## Inputs
 
-入力タイプに応じて以下のフローで処理する:
+Dispatch by input type:
 
 ```
-入力 → git URL / git リポジトリパス? → repo フロー（下記「repo ソースの ingest」）
-     → URL?          → WebFetch で取得       → article として保存
-     → ファイルパス? → Read で読み込み       → file として保存
-     → テキスト直接? → そのまま使用          → article として保存
+input → git URL / git repo path? → repo flow (see "Ingesting a repo source")
+      → URL?               → WebFetch → save as article
+      → file path?         → Read     → save as file
+      → inline text?       → use as-is → save as article
 ```
 
-git URL の判定: `https://…/owner/repo(.git)` / `ssh://…` / `git@host:owner/repo.git`、またはローカルパスで `.git` ディレクトリを含む場合。
+Git URL detection: `https://…/owner/repo(.git)`, `ssh://…`,
+`git@host:owner/repo.git`, or any local path containing a `.git`
+directory.
 
-## セキュリティチェック（必須）
+## Security scan (required)
 
-[security.md](../wiki/references/security.md) に従い `security_scan.py` を実行する。exit 1 で処理を中断。
+Run `security_scan.py` per [security.md](../wiki/references/security.md).
+Exit 1 aborts the ingest.
 
-スクリプトの ✅/❌ サマリー出力をそのまま表示する:
+Print the script's ✅/❌ summary verbatim:
+
 ```
-✅ パス traversal: OK
-✅ 機密データ: OK
-✅ プロンプトインジェクション: OK
+✅ Path traversal: OK
+✅ Sensitive data: OK
+✅ Prompt injection: OK
 ```
 
-## プロセス
+## Procedure
 
-1. **保存先とファイル名を決定**:
-   | 入力タイプ | 保存先 | ファイル名 |
-   |-----------|--------|-----------|
-   | URL / テキスト直接 | `raw/articles/` | `{YYYYMMDD}-{slug}.md` |
-   | 単一ローカルファイル | `raw/files/` | 元のファイル名そのまま |
-   | repo フロー | `raw/files/{repo-slug}/` | 元のファイル名そのまま |
-2. セキュリティチェックを実行（`--filename` には手順 1 で決定した名前を渡す）
-3. フロントマターを付与:
+1. **Determine save destination and filename**:
+   | Input type | Destination | Filename |
+   |---|---|---|
+   | URL / inline text | `raw/articles/` | `{YYYYMMDD}-{slug}.md` |
+   | Single local file | `raw/files/` | Original filename verbatim |
+   | Repo flow | `raw/files/{repo-slug}/` | Original filename verbatim |
+2. Run the security scan (pass the filename from step 1 to
+   `--filename`).
+3. Attach frontmatter:
    ```yaml
    ---
-   title: ドキュメントタイトル        # 必須。ソースの H1 をベースに、内容を反映した記述的タイトルにする
-   scraped: YYYY-MM-DD               # 必須（処理日）
-   source_url: https://example.com   # URL入力の場合のみ付与
-   source_path: path/to/original.md  # ローカルファイル入力の場合のみ付与（元パスの追跡用）
-   tags: [自動推定タグ]               # 本文の主題から推定、推定できなければ空配列 []
+   title: Document title              # required. Base on the source H1, refined to reflect content
+   scraped: YYYY-MM-DD                # required (ingest date)
+   source_url: https://example.com    # attach only for URL inputs
+   source_path: path/to/original.md   # attach only for local-file inputs (tracks the origin)
+   tags: [auto-inferred tags]         # inferred from body; empty array [] if inference fails
    ---
    ```
-4. 手順 1 で決定した保存先に保存
-5. `log.md` に追記:
+4. Save to the destination decided in step 1.
+5. Append to `log.md`:
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py ingest --wiki-root {wiki_root} --slug {slug} --source-kind {source_kind}
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py ingest \
+     --wiki-root {wiki_root} --slug {slug} --source-kind {source_kind}
    ```
 
-## 完了メッセージ
+## Completion message
 
 ```
-── ingest 完了 ──
-保存先: {wiki_root}/raw/articles/{filename}
-フロントマター:
+── ingest complete ──
+Saved to: {wiki_root}/raw/articles/{filename}
+Frontmatter:
   title: {title}
-  source_url: {url}        ← URL入力の場合のみ
+  source_url: {url}        ← only for URL inputs
   scraped: {date}
   tags: [{tags}]
-次のステップ: `wiki-compile` で記事を生成、または `wiki-cycle --compile-only` で compile + lint を一括実行
+Next: `wiki-compile` to generate articles, or `wiki-cycle --compile-only` to run compile + lint together
 ```
 
-## repo ソースの ingest
+## Ingesting a repo source
 
-git リポジトリ（URL またはローカルパス）を取り込む。**複数リポジトリは 3 段で処理する**（横断 wikilink は全リポジトリが出揃って初めて張れるため、段の順序を守る）:
+Ingest a git repository (URL or local path). **Multiple repositories go
+through three passes** — cross-repo wikilinks only resolve after every
+repo is on disk, so the pass order matters:
 
-**段1 — 全リポジトリを clone + manifest 生成**（1コマンドで複数可）:
+**Pass 1 — clone every repository and generate manifests** (batchable in
+one command):
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/repo_ingest.py <url-or-path>... --wiki-root {wiki_root}
 ```
 
-- clone は自動: `ghq` があれば `ghq get --shallow`、なければ `git clone --depth 1` で `{wiki_root}/.cache/repos/` へ
-- manifest は `{wiki_root}/.cache/manifests/{slug}.json` に出力。**全部読まず、必要な tier だけ Read する**
-- 機械生成の `repo-inventory.md` が `raw/files/{slug}/` に保存される
+- Clone is automatic: `ghq get --shallow` if `ghq` is available,
+  otherwise `git clone --depth 1` into `{wiki_root}/.cache/repos/`.
+- Manifest is written to `{wiki_root}/.cache/manifests/{slug}.json`.
+  **Don't read the whole thing — Read only the tier you need.**
+- A machine-generated `repo-inventory.md` is saved under
+  `raw/files/{slug}/`.
 
-**段2 — 全リポジトリの docs 選定 + ingest**:
+**Pass 2 — pick docs + ingest for every repository**:
 
-1. manifest の tier1（README / architecture / adr）を基本とし、ユーザーと選定を確認
-2. 各ファイルを既存の file ingest フロー（セキュリティチェック込み）で `raw/files/{slug}/` に保存
-3. フロントマターに `source_url` + `source_revision`（commit hash）+ `source_path` を付与（[frontmatter-schemas.md](../wiki/references/frontmatter-schemas.md) の repo 節参照）
-4. log.md に追記: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py ingest --wiki-root {wiki_root} --slug {slug} --source-kind "repo @ {short-hash}"`
+1. Start from the manifest's tier 1 (README / architecture / adr), and
+   confirm the selection with the user.
+2. Save each file through the existing file-ingest flow (security scan
+   included) into `raw/files/{slug}/`.
+3. Attach frontmatter with `source_url` + `source_revision` (commit
+   hash) + `source_path`. See the repo section of
+   [frontmatter-schemas.md](../wiki/references/frontmatter-schemas.md).
+4. Append to `log.md`:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py ingest \
+     --wiki-root {wiki_root} --slug {slug} --source-kind "repo @ {short-hash}"
+   ```
 
-**段3 — 一括 compile**:
+**Pass 3 — bulk compile**:
 
-全リポジトリの ingest 完了後に wiki-compile を実行する。手順は [compilation-guide.md](../wiki/references/compilation-guide.md) の「repo ソースの compile」節に従う。
+Run `wiki-compile` once every repository has finished ingest. The
+procedure lives in the "Ingesting a repo source" section of
+[compilation-guide.md](../wiki/references/compilation-guide.md).

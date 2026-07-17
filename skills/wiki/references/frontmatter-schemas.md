@@ -1,79 +1,83 @@
 # Frontmatter Schemas
 
-各ファイル種別のフロントマター定義。
+Frontmatter definitions per file type.
 
-## Wiki 記事（concepts/*.md）
+## Wiki articles (`concepts/*.md`)
 
-正式な JSON Schema は `{wiki_root}/schema/page-template.json` にある。
+The formal JSON Schema lives at `{wiki_root}/schema/page-template.json`.
 
 ```yaml
 ---
-title: ページタイトル           # 必須
-type: wiki                      # 必須、固定値
-source_refs:                    # 必須、{wiki_root}からの相対パス
+title: Page title                # required
+type: wiki                       # required, constant
+source_refs:                     # required, relative to {wiki_root}
   - "raw/articles/xxx.md"
-created: 2026-04-05             # 必須、YYYY-MM-DD
-updated: 2026-04-05             # 必須、YYYY-MM-DD
-category: concepts              # 必須、categories.json のslug
-tags: [tag1, tag2]              # 必須
-related:                        # 任意、{wiki_root}からの相対パス
+created: 2026-04-05              # required, YYYY-MM-DD
+updated: 2026-04-05              # required, YYYY-MM-DD
+category: concepts               # required, slug from categories.json
+tags: [tag1, tag2]               # required
+related:                         # optional, relative to {wiki_root}
   - "concepts/yyy.md"
 ---
 ```
 
-## Raw ソース（raw/articles/*.md）
+## Raw sources (`raw/articles/*.md`)
 
 ```yaml
 ---
-title: ドキュメントタイトル      # 必須
-source_url: https://example.com  # 任意（URLからの取り込み時）
-scraped: 2026-04-05              # 必須、取り込み日
-tags: [tag1, tag2]               # 必須
+title: Document title            # required
+source_url: https://example.com  # optional (for URL ingest)
+scraped: 2026-04-05              # required, ingest date
+tags: [tag1, tag2]               # required
 ---
 ```
 
-## Raw ソース — repo 由来（raw/files/{repo-slug}/*.md）
+## Raw sources — repo-derived (`raw/files/{repo-slug}/*.md`)
 
-repo ingest 経由で取り込むファイルは、上記に加えて以下を付与する:
+Files ingested through repo-ingest carry additional fields:
 
 ```yaml
 ---
 title: "ripgrep GUIDE"
-source_url: "https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md"  # リモート URL（userinfo は除去済みであること）
-source_revision: "48b0c795f4feb37343b2832d991c5c6a3900c08a"  # 必須、取り込み時の HEAD commit hash
-source_path: "GUIDE.md"           # 必須、リポジトリ内相対パス
+source_url: "https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md"  # remote URL (userinfo must be stripped)
+source_revision: "48b0c795f4feb37343b2832d991c5c6a3900c08a"  # required, HEAD commit hash at ingest time
+source_path: "GUIDE.md"          # required, in-repo relative path
 scraped: 2026-07-03
 tags: [ripgrep, docs]
 ---
 ```
 
-**注意**: `source_version` という名前は使わない（source-agnostic pipeline の `Source.source_version: int`（monotonic カウンタ）と意味が衝突するため）。
+**Note**: do NOT use the name `source_version` — it collides with the
+source-agnostic pipeline's `Source.source_version: int` (a monotonic
+counter).
 
-**pipeline v1 スキーマとの対応**（将来の migration 用マッピング表・確定済み）:
+**Mapping to pipeline v1 schema** (migration table — finalized):
 
-| raw フィールド | pipeline `Source` フィールド |
-|---------------|------------------------------|
+| Raw field | Pipeline `Source` field |
+|---|---|
 | `source_url` | `permalink` |
-| `source_revision` | `revision`（確定 — `lib/domain/types.py` の `Source.revision` / `page-template-v1.json` に追加済み） |
-| `source_path` | `extensions["repo"]["source_path"]`（予約 namespace） |
+| `source_revision` | `revision` (finalized — `Source.revision` in `lib/domain/types.py` / added to `page-template-v1.json`) |
+| `source_path` | `extensions["repo"]["source_path"]` (reserved namespace) |
 
-なお v1 スキーマ自体は未採用（v0 が schema-of-record）。採用トリガー: concepts/ に再導出不能な状態を書き込む最初の機能と同一サイクルで v1 migration を実施する。
+Note: the v1 schema itself is not adopted (v0 is the schema-of-record).
+Adoption trigger: the first feature that writes state to `concepts/`
+that cannot be re-derived. Run the v1 migration in the same cycle.
 
-## Query 出力（outputs/queries/*.md）
+## Query output (`outputs/queries/*.md`)
 
 ```yaml
 ---
-title: 質問の要約
+title: Question summary
 type: query
-question: 元の質問文
+question: Original question text
 answered: 2026-04-05
 sources_consulted:
   - "concepts/xxx.md"
-promoted: false                  # true の場合 concepts/ にコピー済み
+promoted: false                  # true if copied to concepts/
 ---
 ```
 
-## Lint レポート（outputs/reports/*.md）
+## Lint report (`outputs/reports/*.md`)
 
 ```yaml
 ---
@@ -87,24 +91,26 @@ summary:
 ---
 ```
 
-## QueryLog エントリ（outputs/querylog.jsonl）
+## QueryLog entries (`outputs/querylog.jsonl`)
 
-各行が1つの JSON オブジェクト（JSONL 形式）。
+Each line is one JSON object (JSONL).
 
 ```jsonl
-{"id":"q_20260405T223000","timestamp":"2026-04-05T22:30:00+09:00","question":"Ingest と Compile の違いは？","sources_consulted":["concepts/llm-wiki-knowledge-base.md"],"sources_cited":["concepts/llm-wiki-knowledge-base.md"],"gap_noted":false,"gap_topics":[],"promoted":false,"promoted_to":null}
+{"id":"q_20260405T223000","timestamp":"2026-04-05T22:30:00+09:00","question":"How is Ingest different from Compile?","sources_consulted":["concepts/llm-wiki-knowledge-base.md"],"sources_cited":["concepts/llm-wiki-knowledge-base.md"],"gap_noted":false,"gap_topics":[],"promoted":false,"promoted_to":null}
 ```
 
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `id` | string | Yes | `q_{YYYYMMDDTHHMMSS}` 形式（タイムスタンプベース） |
-| `timestamp` | string | Yes | ISO 8601 タイムスタンプ |
-| `question` | string | Yes | ユーザの質問文（全文） |
-| `sources_consulted` | string[] | Yes | retrieval 候補から選定して読み込んだ記事パス |
-| `sources_cited` | string[] | Yes | 回答テキストから `[[wikilink]]` を正規表現抽出して収集 |
-| `gap_noted` | boolean | Yes | 回答中に「Wiki にない情報」を指摘したか |
-| `gap_topics` | string[] | Yes | ギャップとして指摘したトピック（空配列可） |
-| `promoted` | boolean | Yes | 回答を concepts/ に昇格したか |
-| `promoted_to` | string\|null | Yes | 昇格先のパス（promoted=false なら null） |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | Yes | `q_{YYYYMMDDTHHMMSS}` (timestamp-based) |
+| `timestamp` | string | Yes | ISO 8601 timestamp |
+| `question` | string | Yes | User question verbatim |
+| `sources_consulted` | string[] | Yes | Article paths actually read from the retrieval candidates |
+| `sources_cited` | string[] | Yes | `[[wikilink]]`s extracted from the answer via regex |
+| `gap_noted` | boolean | Yes | Did the answer flag "not in the wiki"? |
+| `gap_topics` | string[] | Yes | Gap topic names (may be empty) |
+| `promoted` | boolean | Yes | Was the answer promoted to `concepts/`? |
+| `promoted_to` | string \| null | Yes | Path of the promoted article (null when `promoted=false`) |
 
-**注意:** `question` にはユーザの質問文がそのまま記録される。機密情報が含まれる可能性があるため、デフォルトでは git 管理対象外。
+**Note**: `question` stores the user's question verbatim. Because it
+may contain sensitive information, this file is git-ignored by
+default.

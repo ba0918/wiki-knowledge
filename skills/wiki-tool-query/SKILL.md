@@ -1,194 +1,258 @@
 ---
 name: wiki-tool-query
 description: >
-  catalog 登録済みデータソース（sqlite / postgres / mysql / HTTP API）への制約・監査付きアドホック集計を、dry-run 承認フローで実行する。
-  「補填対象者を抽出して」「DB から対象者リストを出して」「アドホック集計」「tool query」で使用する。
-  Selection Recipe 記事（practices）を参照して SQL / request spec を組み、prepare → 人間承認 → execute で結果 CSV を delivery する。
+  Constrained, audited ad-hoc extraction against catalog-registered data
+  sources (sqlite / postgres / mysql / HTTP API), gated by a dry-run
+  approval flow. Trigger phrases: "extract the compensation targets",
+  "pull the target list from the DB", "ad-hoc aggregation", "tool query".
+  The LLM consults a Selection Recipe article (practices) to build the
+  SQL or request spec; prepare → human approve → execute delivers the
+  result CSV.
 ---
 
 # Wiki Tool Query
 
-catalog 登録済みデータソースへの「自由な質問 + 制約された実行」。LLM が SQL を組んでよいが、
-実行前に dry-run 計画（対象定義・選定ファネル・想定件数レンジ）を人間が承認する。
+"Free planning + constrained execution" against catalog-registered data
+sources. The LLM may draft the SQL, but a human approves a dry-run plan
+(target definition, selection funnel, expected row-count range) before
+execution.
 
-**対応 connector**（catalog の `type` で決まる。承認フロー・監査・delivery・single-use は全 type 共通）:
+**Supported connectors** (chosen by the catalog's `type`; approval flow,
+audit, delivery, and single-use are the same for every type):
 
-- `sqlite` — ローカル DB ファイル（read-only URI + PRAGMA + authorizer）
-- `postgres` / `mysql` — リモート DB（read-only role + 静的 SQL 検査 + session read-only）
-- `http` — 汎用 JSON API（Redash / Kibana(ES) / 社内 API。SQL の代わりに request spec を渡す）
+- `sqlite` — local DB file (read-only URI + PRAGMA + authorizer)
+- `postgres` / `mysql` — remote DB (read-only role + static SQL check
+  + session read-only)
+- `http` — generic JSON API (Redash / Kibana(ES) / internal APIs — a
+  request spec takes the place of SQL)
 
-connector 別の書き方・read-only role 設定・TLS・request spec・保証範囲の詳細は
-[tool-query-guide.md](../wiki/references/tool-query-guide.md)。接続の事前診断は `doctor`（後述）。
+Details on per-connector writing conventions, read-only role setup,
+TLS, request spec, and assurance envelope live in
+[tool-query-guide.md](../wiki/references/tool-query-guide.md).
+Pre-flight diagnostics use `doctor` (below).
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。
+**Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
+If missing, point the user at `wiki-init`.
 
-**前提**: `{wiki_root}/tools/catalog.json`（git 管理）に対象 tool が登録済みであること。
-catalog が実行契約の真実源であり、Wiki 記事（Selection Recipe）は説明層 — 記事の編集では
-接続先・allowlist・上限などの安全境界は変わらない。
+**Prerequisite**: the target tool must be registered in
+`{wiki_root}/tools/catalog.json` (git-managed). The catalog is the
+execution contract's source of truth; wiki articles (Selection Recipes)
+are the explanation layer — editing an article does not change the
+connection target, allowlist, or limits (safety perimeter).
 
-## プロセス
+## Process
 
-### 1. Recipe 参照と SQL 組み立て
+### 1. Consult a Recipe and build SQL
 
-1. 依頼内容に対応する Selection Recipe 記事（`category: practices`、tags に `selection-recipe`）を
-   `{wiki_root}/index.md` から探して読む。初回（Recipe がない）場合は依頼者への質問で
-   対象定義・除外条件を確定する
-2. Recipe とユーザー依頼から本実行 SQL と**選定ファネル COUNT SQL**（条件を1段ずつ足した件数見積もり）を組む
-3. SQL はファイルに書く（`{wiki_root}/.cache/` などの一時パスでよい。bundle に bytes コピーされるため以後の編集は無関係）
-4. 書き方の詳細: [tool-query-guide.md](../wiki/references/tool-query-guide.md)
+1. Find the Selection Recipe article that matches the request (
+   `category: practices`, `selection-recipe` tag) via
+   `{wiki_root}/index.md`, and read it. If none exists (first-time
+   case), question the requester to nail down the target definition
+   and exclusion rules.
+2. Using the Recipe + user's request, write the main SQL and the
+   **selection funnel COUNT SQL** (a row-count estimate for each
+   condition added in turn).
+3. Save the SQL to a file (a temp path under `{wiki_root}/.cache/` is
+   fine — the bundle copies the bytes, so edits to your file after
+   prepare are irrelevant).
+4. Writing details:
+   [tool-query-guide.md](../wiki/references/tool-query-guide.md).
 
-### 2. prepare（dry-run）
+### 2. Prepare (dry-run)
 
-SQL 系 tool（sqlite / postgres / mysql）:
+For SQL tools (sqlite / postgres / mysql):
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
   --wiki-root {wiki_root} --tool <tool_id> \
   --sql-file <main.sql> \
-  --count-sql "<段の説明>=<count1.sql>" --count-sql "<次の段>=<count2.sql>" \
+  --count-sql "<step-label>=<count1.sql>" --count-sql "<next step>=<count2.sql>" \
   --key-columns <col>... --expected-rows <min>:<max> --deliver-to <dir> --format json
 ```
 
-http tool は SQL の代わりに **request spec ファイル**（JSON）を渡す（`--sql-file` は使えない）:
+For HTTP tools, pass a **request-spec file** (JSON) instead of SQL
+(`--sql-file` is not accepted):
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py prepare \
   --wiki-root {wiki_root} --tool <http_tool_id> \
   --request-file <main.request.json> \
-  --count-request "<段の説明>=<count.request.json>" \
+  --count-request "<step-label>=<count.request.json>" \
   --key-columns <col>... --expected-rows <min>:<max> --deliver-to <dir> --format json
 ```
 
-- **承認前に COUNT だけは走る**: prepare のファネル COUNT は本実行と同じ enforcement
-  （connector 防御 / allowed_tables or endpoint allowlist / timeout）と監査記録を通る。ユーザーに明示する
-- 生成された immutable proposal bundle（`outputs/toolquery-plans/{plan_id}/`）が以後の唯一の実行対象
-- request spec の書き方（records_path / count_path / URL canonicalization / メモリモデル）は guide 参照
+- **COUNTs run before approval**: prepare's funnel COUNT queries go
+  through the same enforcement as real execution (connector defense /
+  allowed_tables or endpoint allowlist / timeout) and are audited. Say
+  this to the user.
+- The generated immutable proposal bundle
+  (`outputs/toolquery-plans/{plan_id}/`) becomes the only executable
+  artifact from that point on.
+- Request-spec conventions (`records_path` / `count_path` / URL
+  canonicalization / memory model) live in the guide.
 
-### 3. 承認依頼（summary-first で提示）
+### 3. Approval request (summary-first)
 
-ユーザーに以下の順で提示する。SQL 本文は折りたたみ（`<details>`）で添付:
+Present to the user in this order. Full SQL goes in a `<details>` fold:
 
 ```
-対象定義: <1行で>
-inclusion / exclusion: <箇条書き>
-ファネル: <label>: <count> 件 → <label>: <count> 件 → …
-想定件数レンジ: <min>〜<max> 件
-delivery 先: <dir>
+Target: <one line>
+inclusion / exclusion: <bullets>
+Funnel: <label>: <count> → <label>: <count> → …
+Expected rows: <min>–<max>
+Delivery: <dir>
 tool: <tool_id> / plan_id: <plan_id> / sql_digest: <digest>
 ```
 
-選択肢は **3 択のみ**（自動承認となるデフォルトは設けない）:
+Options are **exactly three** — no auto-approve default:
 
-1. **実行** → ユーザー本人に approve コマンドを案内する（下記）
-2. **条件を修正** → SQL を直して prepare からやり直し（= 新 plan_id）。旧 plan の扱いは
-   事実どおりに伝える: 未承認なら draft のまま実行不能。**承認済みで TTL 内なら実行可能なまま残る**
-   ため、破棄したい場合は「実行しない」運用であることを提示する
-3. **中止**
+1. **Execute** → guide the user to run the approve command themself
+   (below).
+2. **Modify conditions** → fix the SQL and rerun prepare (produces a
+   new plan_id). Report the old plan honestly: an unapproved plan
+   stays draft and cannot run; **an approved plan within its TTL
+   remains executable** — if the intent is to discard it, tell the
+   user the enforcement is "don't run it."
+3. **Cancel**.
 
-### 4. approve（人間が実行する — LLM は代行しない）
+### 4. Approve (the human runs it — the LLM does not substitute)
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py approve \
-  --wiki-root {wiki_root} --plan <plan_id> --approved-by <名前>
+  --wiki-root {wiki_root} --plan <plan_id> --approved-by <name>
 ```
 
-- **LLM は approve コマンドを実行しない**。ユーザーに `! <コマンド>` などでの自己実行を依頼する
-- approve は summary（plan_id / tool / sql_digest / 想定件数 / delivery / expires_at / ファネル）を
-  再表示し、確認プロンプト（TTY 必須、stderr）で `yes` 入力を求める。JSON の手編集は不要
-- 承認の有効期限は prepare から 24 時間（expires_at）
+- **Never run the approve command as the LLM.** Ask the user to run it
+  themselves (e.g. via `! <command>`).
+- Approve re-shows the summary (plan_id / tool / sql_digest / expected
+  rows / delivery / expires_at / funnel) and requires `yes` on a
+  confirmation prompt (TTY required, stderr). No hand-editing JSON.
+- The approval expires 24 hours after prepare (`expires_at`).
 
-### 5. execute と完了報告
+### 5. Execute and completion report
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py execute \
   --wiki-root {wiki_root} --plan <plan_id> --format json
 ```
 
-完了テンプレート（値は execute の JSON 出力から埋める）:
+Completion template (fill from the execute JSON output):
 
 ```
-✅ 実行完了
-- 取得件数: <row_count> 件（想定 <min>〜<max> 件の範囲内）
-- manifest: 重複 key <duplicate_key_count> 件 / NULL <要点> / csv_sha256: <digest>
-- 無害化したセル: <sanitized_cell_count> 件
-- delivery: <dir>/<run_id>/（result.csv + manifest.json）
+✅ Execution complete
+- Rows: <row_count> (within expected range <min>–<max>)
+- manifest: duplicate keys <duplicate_key_count> / NULL <key facts> / csv_sha256: <digest>
+- Sanitized cells: <sanitized_cell_count>
+- delivery: <dir>/<run_id>/ (result.csv + manifest.json)
 - published_at: <published_at> / plan_id: <plan_id>
 ```
 
-execute の JSON 出力に `warnings` が含まれる場合（published 監査イベントや
-receipt の記録失敗）は、その旨をテンプレートに追記して報告する — publish 自体は
-成功しており、監査の欠損は Phase B の reconcile 対象。「監査済み」と誇張しない。
+If the execute JSON contains `warnings` (published audit event or
+receipt logging failures), add a line to the template. Publish itself
+succeeded — the audit gap is a Phase B reconcile target. Do NOT
+overstate as "audited."
 
-**失敗テンプレートの適用判定**: execute が失敗したら、まず
-`{wiki_root}/outputs/toolquery-plans/{plan_id}/state.json` の `status` を確認する:
+**Failure template — which to use**: on failure, first check
+`{wiki_root}/outputs/toolquery-plans/{plan_id}/state.json` for
+`status`:
 
-- `status: approved` のまま → 承認は未消費（検証マトリクスで拒否された等）。
-  原因を直せば**同じ plan を再 execute できる**（TTL 内なら）
-- `status: consumed` → 承認は消費済み。以下のテンプレートで報告する:
+- Still `status: approved` → the approval is unconsumed (verification
+  matrix rejected, etc.). Fix the cause and **re-execute the same
+  plan** within TTL.
+- `status: consumed` → the approval is spent. Report as:
 
 ```
-❌ 実行失敗: <reason>
-この plan の承認は消費済みです（consumed = 承認の消費であり実行成功ではない）。
-再実行するには新しい prepare → 承認が必要です。条件はそのままで再 prepare しますか？
+❌ Execution failed: <reason>
+This plan's approval has been consumed (consumed = the approval was
+spent — not that execution succeeded). Re-running requires a new
+prepare → approval. Same conditions — re-prepare?
 ```
 
-### 6. 実施記録と Recipe 昇格
+### 6. Record and Recipe promotion
 
-- 案件完了後、Recipe 記事の新規作成・更新を提案する（判断・除外条件・ファネル構成の変化を反映）。
-  テンプレート: `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/selection-recipe-template.md`、
-  昇格基準: [tool-query-guide.md](../wiki/references/tool-query-guide.md)
-- 依頼受領時刻を実施記録（Recipe 記事の実施ログ節）に残す（所要時間計測の起点。終点は監査ログの published、
-  承認待ちは approved イベントで控除）
+- After a case closes, propose creating or updating a Recipe article
+  (capture the decisions, exclusion rules, and any funnel changes).
+  Template:
+  `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/selection-recipe-template.md`.
+  Promotion criteria:
+  [tool-query-guide.md](../wiki/references/tool-query-guide.md).
+- Record the request arrival time in the Recipe's execution-log
+  section — this is the start of the elapsed-time measurement.
+  The end is the audit log's `published` event. Time spent waiting on
+  approval is deducted using the `approved` event.
 
-## doctor（接続とリモート enforcement の事前診断）
+## `doctor` (pre-flight for remote connections and enforcement)
 
-リモート DB / API を登録したら、実行前に `doctor` で接続・read-only role・delivery を診断する:
+After registering a remote DB or API, diagnose connectivity, read-only
+role, and delivery:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/tool_query_run.py doctor \
   --wiki-root {wiki_root} [--tool <id>] [--probe-write <tool-id>] --format table
 ```
 
-- 固定列 `tool / check / status(OK|NG|SKIP) / reason_code / hint`。exit 0 = 必須 OK / 1 = NG / 2 = usage / 130 = 中断
-- read-only は独立 check（`session_readonly` / `role_grants`）に分解。`role_write_denial` と
-  機械検証外の権限（CREATE / TEMPORARY / EXECUTE）は **SKIP** を明示（無言で流さない）
-- doctor は結果データに触れない（COUNT すら実行しない）。監査は plan 非依存の `doctor` イベント
-- `--probe-write`（二重 opt-in）は canary relation への INSERT が拒否されることを確認する。詳細は guide
+- Fixed columns: `tool / check / status(OK|NG|SKIP) / reason_code / hint`.
+  Exit codes: 0 = required OK / 1 = NG / 2 = usage / 130 = interrupted.
+- Read-only is decomposed into independent checks (`session_readonly`
+  / `role_grants`). `role_write_denial` and permissions outside
+  mechanical verification (CREATE / TEMPORARY / EXECUTE) are marked
+  **SKIP** explicitly — do not silently pass over them.
+- Doctor never touches result data (no COUNT). Audit is a
+  plan-independent `doctor` event.
+- `--probe-write` (double opt-in) verifies that INSERT to a canary
+  relation is rejected. Guide has the details.
 
-## 保証範囲（ユーザーに聞かれたら答える・誇張しない）
+## Assurance envelope (answer honestly when asked — no overstating)
 
-**守る**: 承認後の SQL / request spec・ファネル・delivery 先の*偶発的*変更・取り違え・陳腐化
-（catalog 変更後の実行）・再実行（replay）の検出と拒否。read-only 逸脱・allowlist 外アクセス・
-上限超過の拒否。
+**Guaranteed**: detection and rejection of *accidental* changes to
+SQL / request spec / delivery destination after approval; mix-ups;
+staleness (execution after catalog change); replay. Read-only
+violations, out-of-allowlist access, and limit overruns are rejected.
 
-**connector 別の保証範囲**:
+**Per-connector envelope**:
 
-- **sqlite**: authorizer（実行エンジン自身の判定）による read-only 三重防御
-- **postgres / mysql**: 保証は「DB 側 read-only role（第一防御）+ 静的 SQL 検査 + session read-only」の
-  **組み合わせ**。role を SELECT 専用にしないと防御が縮む（guide の role 設定手順が前提）。
-  MySQL の read-only transaction は一時テーブル DML を許容する穴があり、role 側で
-  `CREATE TEMPORARY TABLES` を付与しないことで塞ぐ。**MariaDB は検証対象外**
-- **http**: endpoint allowlist + method 制限 + レスポンスサイズ上限で守る。クエリ内容（ES / Redash の
-  DSL）の静的検証はしない。非同期 job / polling は非対応（one-shot JSON API のみ）
+- **sqlite**: read-only triple defense via authorizer (the execution
+  engine itself).
+- **postgres / mysql**: guarantee is the **combination** of "DB-side
+  read-only role (primary defense) + static SQL check + session
+  read-only." Defense shrinks if the role is not SELECT-only — the
+  guide's role-setup procedure is a prerequisite. MySQL read-only
+  transactions have a hole allowing temp-table DML; close it on the
+  role side by not granting `CREATE TEMPORARY TABLES`. **MariaDB is
+  out of scope.**
+- **http**: guarded by endpoint allowlist + method restriction +
+  response-size cap. Query bodies (ES / Redash DSL) are NOT statically
+  inspected. Async job / polling patterns are not supported (one-shot
+  JSON API only).
 
-**守らない（PoC の限定）**:
+**Not guaranteed (PoC limits)**:
 
-- 同一 OS ユーザーで動く悪意あるプロセスによる proposal/approval ファイル改竄の検出
-  （権限分離がないため暗号学的な真正性証明はしない）。人間承認の真正性は本スキルの運用フロー +
-  git 管理 catalog のレビューで担保する**運用上の性質**であり、スクリプトが証明する性質ではない
-- DB スナップショットの束縛（prepare の COUNT と execute の間に DB 状態は変わり得る。
-  manifest の `data_as_of` と想定件数レンジ照合が乖離の検出線）
-- credential は prompt・argv・stdout/stderr・監査ログ・エラーメッセージに載せないが、
-  同一 OS ユーザー権限でのファイル読み取り自体は防げない
-- delivery 先の no-clobber 保証は「全 writer が本スクリプト経由」である前提
+- Detecting proposal / approval file tampering by a malicious process
+  running as the same OS user (no privilege separation — no
+  cryptographic authenticity proof). The authenticity of human
+  approval is an **operational property** upheld by this skill's flow
+  + the PR review of the git-managed catalog — not something the
+  script proves.
+- DB snapshot binding: the DB may change between prepare's COUNT and
+  execute. The manifest's `data_as_of` compared against the expected
+  row-count range is the drift-detection line.
+- Credentials never appear in prompts, argv, stdout/stderr, audit, or
+  errors, but file reads by another process running as the same OS
+  user are not prevented.
+- Delivery no-clobber assumes every writer goes through this script.
 
-## 制約（スクリプトが enforcement する）
+## Constraints (script-enforced)
 
-- SQL 系: SELECT / WITH のみ（複文・コメント開始・未知関数不可）。connector 別 read-only 防御 +
-  relation allowlist（catalog の `allowed_tables`。pg/mysql は sqlglot 静的検査）
-- http: endpoint allowlist（method + segment 境界の path prefix）+ URL canonicalize + リダイレクト拒否 +
-  レスポンスサイズ上限（`max_response_bytes`）
-- 出力上限: catalog の `limits`（max_rows / max_result_bytes / max_cell_bytes / timeout_sec）
-- 結果データは delivery 先に引き渡して非保持。監査ログ（`outputs/toolquery-audit.jsonl`）は
-  値を含まないメタデータのみ
-- CSV は式インジェクション無害化（OWASP 準拠）済み
+- SQL tools: SELECT / WITH only (no multi-statements, no comment
+  starts, no unknown function calls). Per-connector read-only defense
+  + relation allowlist (`allowed_tables` in the catalog; pg/mysql get
+  the sqlglot static gate).
+- http: endpoint allowlist (method + segment-boundary path prefix) +
+  URL canonicalization + redirect denial + response-size cap
+  (`max_response_bytes`).
+- Output caps: catalog `limits` (`max_rows` / `max_result_bytes` /
+  `max_cell_bytes` / `timeout_sec`).
+- Result data is handed to the delivery destination and not retained.
+  The audit log (`outputs/toolquery-audit.jsonl`) is metadata only,
+  no values.
+- CSV is sanitized against formula injection (OWASP compliant).

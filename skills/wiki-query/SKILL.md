@@ -1,87 +1,118 @@
 ---
 name: wiki-query
 description: >
-  Wiki の知識に基づいて質問に回答する。一般知識ではなく Wiki を情報源として、出典付きで回答を合成する。
-  「wiki で調べて」「query」「wiki に聞いて」「ナレッジベースから回答」「wiki の知識で答えて」で使用する。
+  Answer questions using wiki knowledge. Synthesize the answer from the
+  wiki as source material — not general knowledge — with citations.
+  Trigger phrases: "look it up in the wiki", "query", "ask the wiki",
+  "answer from the knowledge base", "use the wiki to answer".
 ---
 
 # Wiki Query
 
-Wiki の知識に基づいて質問に回答する。一般知識ではなく Wiki を情報源とする。
+Answer questions from the wiki, not from general knowledge.
 
-**wiki_root の取得**: `AGENTS.md` の `wiki_root:` フィールドを読む（未設定なら wiki-init を案内）。パス解決の詳細は [paths.md](../wiki/references/paths.md) を参照。
+**Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
+If missing, point the user at `wiki-init`. Details in
+[paths.md](../wiki/references/paths.md).
 
-## プロセス
+## Procedure
 
-1. **候補選定（retrieval pre-pass）**: 質問からキーワードを抽出し（日本語・英語の両方が考えられる場合は両方入れる）:
+1. **Candidate selection (retrieval pre-pass)**: extract keywords from
+   the question. If the question could hit content in either Japanese
+   or English, include both.
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/query_retrieve.py --wiki-root {wiki_root} --keywords <kw1> <kw2> ...
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/query_retrieve.py \
+     --wiki-root {wiki_root} --keywords <kw1> <kw2> ...
    ```
-   graph layer と Trust Score を消費した候補リスト（スコア・trust・選定理由つき）が返る。`outputs/graph.json` が無い場合は exit 2 で停止するので、先に `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}` を実行してから `query_retrieve.py` を再実行する
-2. **関連記事を読む**: 候補リストの上位から、回答の正確性が上がるものだけを選んで全文読み込む。候補外の記事が必要なら `{wiki_root}/index.md` から補ってよい
-3. **回答合成**:
-   - 主張には必ず `[[slug]]` で出典を付ける
-   - **trust-aware 引用**: trust **0.30 未満** の記事を引用する場合「（信頼度低: {trust}）」を付す
-   - 記事間の一致点・矛盾点を明示する
-   - Wiki にカバーされていない領域を「ギャップ」として指摘し、**トピック名を明示する**
-   - 質問の性質に応じてフォーマットを選ぶ（事実→散文、比較→テーブル、手順→番号付きリスト）
-4. **保存を提案**: 回答後、Wiki 記事として保存するか確認する
+   Returns a candidate list with score, trust, and selection rationale,
+   built from the graph layer + Trust Score. If `outputs/graph.json` is
+   missing the script exits 2 — run
+   `python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/graph_gen.py --wiki-root {wiki_root}`
+   first, then rerun `query_retrieve.py`.
+2. **Read related articles**: from the top of the candidate list, read
+   the full text of articles that will actually improve accuracy. You
+   may pull in articles outside the candidate list from
+   `{wiki_root}/index.md` if needed.
+3. **Synthesize the answer**:
+   - Every claim must carry a `[[slug]]` citation.
+   - **Trust-aware citation**: when citing an article with trust
+     **below 0.30**, annotate as "(low trust: {trust})".
+   - Make agreements and contradictions between articles explicit.
+   - Call out uncovered areas as "gaps" and **name the topic**.
+   - Choose the format based on the question: prose for facts, a table
+     for comparisons, numbered lists for procedures.
+4. **Offer to save**: after answering, ask whether to save as a wiki
+   article.
 
-**一般知識から回答しない。** Wiki の記事を必ず先に読む。矛盾がある場合は両方を提示する。
+**Do NOT answer from general knowledge.** Read wiki articles first. If
+articles conflict, present both.
 
-## 回答の保存（Wiki Promote）
+## Saving the answer (Wiki Promote)
 
-ユーザが保存を承認した場合:
-1. `{wiki_root}/concepts/{slug}.md` に記事として保存（`tags: [query, synthesis]`）
-2. [post-processing.md](../wiki/references/post-processing.md) に従い後処理（Backlink Audit → index/AGENTS.md 更新 → wikilink rendering → log_append promote）
+If the user approves saving:
 
-保存しない場合:
-1. `{wiki_root}/outputs/queries/{YYYYMMDD}-{slug}.md` に回答を保存
-   - `{slug}` は質問の主題から英語 kebab-case で生成
-   - 本文には回答全文をそのまま保存（要約しない）
-   - フロントマター:
+1. Save as `{wiki_root}/concepts/{slug}.md` with
+   `tags: [query, synthesis]`.
+2. Run post-processing per
+   [post-processing.md](../wiki/references/post-processing.md) (Backlink
+   Audit → index/AGENTS.md update → wikilink rendering → log_append
+   promote).
+
+If not saving:
+
+1. Save the answer to
+   `{wiki_root}/outputs/queries/{YYYYMMDD}-{slug}.md`.
+   - Derive `{slug}` from the question's subject as kebab-case English.
+   - Store the full answer verbatim (do not summarize).
+   - Frontmatter:
    ```yaml
    ---
-   title: 質問の要約
+   title: Question summary
    type: query
-   question: 元の質問文
+   question: Original question text
    answered: YYYY-MM-DD
    sources_consulted:
      - "concepts/xxx.md"
    promoted: false
    ---
    ```
-2. `log.md` に追記:
+2. Append to `log.md`:
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py query --wiki-root {wiki_root} --summary "{question summary}"
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/log_append.py query \
+     --wiki-root {wiki_root} --summary "{question summary}"
    ```
 
-## QueryLog 追記（保存判断の後に必ず実行）
+## QueryLog append (always run after the save decision)
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/querylog_append.py --wiki-root {wiki_root} \
-  --question "{ユーザの元の質問文}" \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/querylog_append.py \
+  --wiki-root {wiki_root} \
+  --question "{user's original question}" \
   --consulted concepts/{slug1}.md concepts/{slug2}.md \
-  --answer-file {保存した回答ファイルのパス} \
+  --answer-file {path to the saved answer file} \
   [--gap-topics "{topic1}" "{topic2}"] \
   [--promoted --promoted-to concepts/{slug}.md]
 ```
 
-- `--consulted`: 読み込んだ全記事パス（`{wiki_root}` からの相対）
-- `--answer-file`: 回答テキストの保存先。`sources_cited` はここから抽出される
-- `--gap-topics`: ギャップのトピック名（なければ省略）
-- exit code: `0` = 成功 / `1` = 検証エラー / `2` = 引数エラー
+- `--consulted`: every article path read (relative to `{wiki_root}`).
+- `--answer-file`: path to the saved answer text. `sources_cited` is
+  extracted from it.
+- `--gap-topics`: gap topic names (omit if none).
+- Exit codes: `0` = success / `1` = validation error / `2` = argument
+  error.
 
-**⚠** `querylog.jsonl` にはユーザの質問文がそのまま記録される。デフォルトで `.gitignore` 対象。
+**⚠** `querylog.jsonl` stores the user's original question verbatim.
+It is git-ignored by default.
 
-## 完了メッセージ
+## Completion message
 
 ```
-── query 完了 ──
-参照記事: {N} 件（{slug}, ...）
-ギャップ: {gap_topics または "なし"}
-保存: {保存先パス}
-次のステップ: {promote 済みなら省略、未保存なら `wiki-query` で追加質問}
+── query complete ──
+Consulted: {N} article(s) ({slug}, ...)
+Gaps: {gap_topics or "none"}
+Saved: {save path}
+Next: {omit if promoted; else `wiki-query` for follow-ups}
 ```
 
-`{N}` と `{slug}` は `sources_consulted`（実際に読んだ記事）に基づく。
+`{N}` and `{slug}` come from `sources_consulted` (articles actually
+read).

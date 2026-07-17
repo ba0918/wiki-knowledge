@@ -6,7 +6,7 @@ tags: [knowledge-graph, graphify, design-patterns, brainstorm-summary]
 
 # graphify から学ぶ知識グラフ構築の概念とパターン
 
-本ドキュメントは、`safishamsi/graphify` リポジトリ（`examples/graphify/` に clone 済み）の調査と、その概念を wiki-knowladge プロジェクトに取り込むための team-brainstorm セッション (Round 1-3) の成果をまとめたもの。出典は graphify のソースコード、ARCHITECTURE.md、および 5 ロール (Challenger / Explorer / Connector / Grounded / Knowledge Graph Expert) の議論。
+本ドキュメントは、`safishamsi/graphify` リポジトリ（`examples/graphify/` に clone 済み）の調査と、その概念を wiki-knowledge プロジェクトに取り込むための team-brainstorm セッション (Round 1-3) の成果をまとめたもの。出典は graphify のソースコード、ARCHITECTURE.md、および 5 ロール (Challenger / Explorer / Connector / Grounded / Knowledge Graph Expert) の議論。
 
 ## graphify とは
 
@@ -58,7 +58,7 @@ embeddings に依存せず、グラフ密度だけでコミュニティを検出
 
 ファイル単位の SHA256 を記録し、変更があったファイルのみ再 extract。これにより 100+ ファイル規模でもインクリメンタルに graph を更新できる。
 
-## wiki-knowladge への適用候補 (7 案)
+## wiki-knowledge への適用候補 (7 案)
 
 調査の結果、graphify から取り込む候補として以下を抽出した:
 

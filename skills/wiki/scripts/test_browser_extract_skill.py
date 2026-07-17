@@ -75,8 +75,10 @@ class TestSkillStructure:
 
     def test_states_human_approves_llm_must_not(self) -> None:
         text = _read_skill()
-        assert "LLM" in text and "代行" in text, "approve の LLM 代行禁止文言がない"
-        assert "seal-at-prepare" in text, "承認モデル seal-at-prepare の明示がない"
+        assert "LLM" in text and "substitute" in text, (
+            "SKILL.md must state that the LLM does not substitute for human approval"
+        )
+        assert "seal-at-prepare" in text, "the seal-at-prepare approval model must be stated"
 
     @pytest.mark.parametrize("subcommand", sorted(_REAL_SUBCOMMANDS))
     def test_every_subcommand_is_documented(self, subcommand: str) -> None:

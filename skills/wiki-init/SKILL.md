@@ -1,24 +1,28 @@
 ---
 name: wiki-init
 description: >
-  プロジェクトに Wiki 構造（ディレクトリ・テンプレート・AGENTS.md）を初期化する。
-  「wiki 初期化」「wiki init」「新しい wiki を作りたい」「ナレッジベースを作成」で使用する。
+  Initialize the wiki structure (directories, templates, AGENTS.md) in a
+  project. Trigger phrases: "wiki init", "initialize wiki", "create a new
+  wiki", "set up a knowledge base".
 ---
 
 # Wiki Init
 
-プロジェクトに Wiki 構造をブートストラップする。
+Bootstrap the wiki structure in a project.
 
-パス解決は [paths.md](../wiki/references/paths.md) に従う。
+Path resolution follows [paths.md](../wiki/references/paths.md).
 
-## 事前チェック
+## Preflight
 
-プロジェクトルートの `AGENTS.md`（または `CLAUDE.md`）に `wiki_root` が既に存在する場合、再初期化するか確認する（どちらも存在しない場合は確認不要）。
+If the project root's `AGENTS.md` (or `CLAUDE.md`) already has
+`wiki_root`, ask whether to reinitialize. (Skip the confirmation only if
+neither file exists.)
 
-## プロセス
+## Procedure
 
-1. Wiki パスを決定（デフォルト: `.wiki`、ユーザ指定可）。`wiki_root` はプロジェクトルート基準の相対パスで表記する
-2. ディレクトリを作成:
+1. Decide the wiki path (default: `.wiki`; user-overridable). `wiki_root`
+   is a project-root-relative path.
+2. Create directories:
    ```
    {wiki_root}/
    ├── raw/articles/
@@ -28,28 +32,42 @@ description: >
    ├── outputs/reports/
    └── schema/
    ```
-   ※ `index.md` と `log.md` はファイル — 手順 3 のテンプレコピーで作成する
-3. テンプレートファイルを配置（テンプレートは全て `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/` に実体がある）:
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/page-template.json` → `{wiki_root}/schema/page-template.json`（そのままコピー）
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/categories.json` → `{wiki_root}/schema/categories.json`（そのままコピー）
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/index-template.md` → `{wiki_root}/index.md`（そのままコピー）
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/log-template.md` → `{wiki_root}/log.md`（`[YYYY-MM-DD]` を実行日に置換）
-   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/wiki-gitignore-template` → `{wiki_root}/.gitignore`
-     - 既に存在する場合は上書きせず、未記載の行だけを追記（merge 方式）
-4. プロジェクトルートの `AGENTS.md` を設定:
-   - **AGENTS.md がない場合**: `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/agents-md-template.md` を元に新規作成。プレースホルダを全て埋める:
-     - `wiki_root` に実パスを設定
-     - 本文中の `{wiki_root}` も実パスに展開（`{slug}` 等は残す）
-     - `SCOPE_DESCRIPTION` は目的が判別できれば1〜2文、できなければ「_スコープ未設定。最初の ingest 時に記述する_」
-   - **AGENTS.md に既に `wiki_root` がある場合**: 既存値を保持
-   - **CLAUDE.md が存在しない場合**: `@AGENTS.md` のみを記述した `CLAUDE.md` を作成する
-5. 完了メッセージで次のステップ（wiki-ingest）を案内
+   Note: `index.md` and `log.md` are files created by step 3's template
+   copy.
+3. Place template files (originals live under
+   `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/`):
+   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/page-template.json` →
+     `{wiki_root}/schema/page-template.json` (copy verbatim)
+   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/categories.json` →
+     `{wiki_root}/schema/categories.json` (copy verbatim)
+   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/index-template.md` →
+     `{wiki_root}/index.md` (copy verbatim)
+   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/log-template.md` →
+     `{wiki_root}/log.md` (substitute `[YYYY-MM-DD]` with today's date)
+   - `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/wiki-gitignore-template`
+     → `{wiki_root}/.gitignore`
+     - If a `.gitignore` already exists, do not overwrite. Merge:
+       append only the lines that are not yet present.
+4. Configure the project root's `AGENTS.md`:
+   - **If `AGENTS.md` does not exist**: create it from
+     `${CLAUDE_PLUGIN_ROOT}/skills/wiki/assets/agents-md-template.md`
+     and fill in all placeholders:
+     - Set `wiki_root` to the real path.
+     - Expand `{wiki_root}` in the body to the real path. (Leave other
+       placeholders like `{slug}` alone.)
+     - `SCOPE_DESCRIPTION`: 1–2 sentences if the purpose is clear;
+       otherwise "_Scope not set. Fill this in on first ingest._"
+   - **If `AGENTS.md` already has `wiki_root`**: keep the existing value.
+   - **If `CLAUDE.md` does not exist**: create a `CLAUDE.md` that only
+     contains `@AGENTS.md`.
+5. Point the user to the next step (`wiki-ingest`) in the completion
+   message.
 
-## 完了メッセージ
+## Completion message
 
 ```
-── init 完了 ──
-Wiki ルート: {wiki_root}/
-作成ディレクトリ: raw/articles/, raw/files/, concepts/, outputs/queries/, outputs/reports/, schema/
-次のステップ: `wiki-ingest <URL or file>` でソースを取り込む
+── init complete ──
+Wiki root: {wiki_root}/
+Created: raw/articles/, raw/files/, concepts/, outputs/queries/, outputs/reports/, schema/
+Next: `wiki-ingest <URL or file>` to bring in a source
 ```
