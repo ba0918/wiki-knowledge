@@ -46,6 +46,14 @@ execution contract's source of truth; wiki articles (Selection Recipes)
 are the explanation layer — editing an article does not change the
 connection target, allowlist, or limits (safety perimeter).
 
+**If the tool is NOT in the catalog**, do not improvise a connection —
+route to registration: draft a catalog entry with the user (connector
+sections + "Sample catalog setup" in
+[tool-query-guide.md](../wiki/references/tool-query-guide.md)), have
+them place credentials in `{wiki_root}/.local/credentials.json` for
+remote connectors, then run `catalog-validate` and `doctor`. The
+catalog change lands through normal PR review before any extraction.
+
 ## Process
 
 ### 1. Consult a Recipe and build SQL

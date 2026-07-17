@@ -42,6 +42,7 @@ To register from a local clone: `/plugin marketplace add /path/to/wiki-knowledge
 | `/wiki-lint` | Ten quality checks + Trust Score + Gap Detection |
 | `/wiki-cycle` | Orchestrator: runs ingest → compile → lint end to end |
 | `/wiki-tool-query` | Approved ad-hoc data extraction against registered data sources (advanced) |
+| `/wiki-browser-extract` | Contained extraction from browser-only tools — Tool Query's parallel line for UIs without an API (advanced) |
 
 ## Core workflow: grow the wiki
 
@@ -134,16 +135,52 @@ ships four connectors: **sqlite / postgres / mysql / HTTP API**
 (Phase A2). Approval flow, audit, and delivery are connector-agnostic;
 new sources are added by writing an adapter to the Connector protocol.
 Browser-driven admin tools (no API) don't fit the "query → rows" model,
-so they're carved out as a separate design — see `/wiki-browser-extract`
-if you need it, though it lives outside the main plugin scope.
+so they're carved out as a separate design with its own skill — see
+the next section, `/wiki-browser-extract`.
 
-### Setup
+### Registering a data source
 
-- Register connection targets in `{wiki_root}/tools/catalog.json`
-  (git-managed — the catalog is the source of truth for execution
-  contracts: connection targets, table allowlists, row caps).
-- Credentials go in `{wiki_root}/.local/credentials.json` (git-ignored,
-  sqlite doesn't need any).
+The catalog `{wiki_root}/tools/catalog.json` (git-managed) is the
+source of truth for execution contracts: connection targets, table
+allowlists, row caps. Adding a data source means adding an entry —
+a minimal sqlite one looks like:
+
+```json
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "tool_id": "events-db",
+      "type": "sqlite",
+      "connection": { "path": "data/events.sqlite3" },
+      "allowed_tables": ["users", "registrations"],
+      "limits": { "max_rows": 10000, "max_result_bytes": 10485760,
+                  "max_cell_bytes": 65536, "timeout_sec": 60 },
+      "allowed_statements": ["select"],
+      "delivery": { "allowed_dirs": ["outputs/deliveries"] }
+    }
+  ]
+}
+```
+
+1. **Add the catalog entry.** For `postgres` / `mysql` the connection
+   is declared as fields (`host` / `port` / `dbname` / `user` +
+   `credential_ref`) and a DB-side **read-only role is a
+   prerequisite** — the role-setup procedure, the `http` connector's
+   endpoint-allowlist format, and a full sample walkthrough live in
+   [`tool-query-guide.md`](skills/wiki/references/tool-query-guide.md)
+   (this repo's own `.wiki/tools/catalog.json` also ships sample
+   entries for shape).
+2. **Credentials** (remote connectors only) go in
+   `{wiki_root}/.local/credentials.json` (git-ignored, mode ≤ 0600,
+   referenced by `credential_ref`; sqlite needs none).
+3. **Validate**: `tool_query_run.py catalog-validate --wiki-root {wiki_root}`.
+4. **Pre-flight**: `tool_query_run.py doctor` — verifies connectivity,
+   that the role is truly read-only, and delivery, without touching
+   real data.
+
+Catalog changes go through normal PR review — by design, nothing the
+LLM writes in a wiki article can move the safety perimeter.
 
 ### Three-stage flow
 
@@ -189,6 +226,46 @@ After a case closes, capture the decisions and exclusion rules as a
 request comes in, the LLM can read the Recipe and reproduce the same
 quality of extraction. Manual work turns into shared knowledge — the
 reason this skill lives inside the wiki, not next to it.
+
+## Advanced: browser extraction (`/wiki-browser-extract`)
+
+Tool Query's parallel line, for the tools that only exist as a
+browser UI — an admin screen with a CSV export button and no API.
+SQL-style mechanical guarantees (static query checks, DB-side
+read-only roles) are impossible in a browser, so instead of
+pretending otherwise, this line earns an honestly-scoped assurance
+from **containment + provenance**:
+
+- **Fixed flow per tool** — each registered tool has a SHA-256-pinned
+  Python flow that drives an authenticated Chromium through a narrow
+  capability API. Network traffic the flow didn't declare
+  (origins / methods / paths) is blocked and audited.
+- **Verification contract** — a closed-vocabulary contract rejects
+  *false success*: data that looks right but isn't (filter not
+  applied, wrong tenant, dropped pagination, partial fetch,
+  duplicates).
+- **Seal-at-prepare approval** — `prepare` completes the extraction
+  and seals artifact + manifest. By the time a human is asked, the
+  data is already on this machine: approval gates **distribution**,
+  not extraction. `execute` re-derives the seal hash and only
+  releases the sealed bytes — what the approver saw is byte-identical
+  to what ships.
+
+```
+prepare (extract + seal) → approve (human, TTY) → execute (release only)
+```
+
+Honest limits, stated up front: read-only is **not** mechanically
+enforced here — a dedicated minimum-privilege account is a
+registration prerequisite, not an afterthought. Registering a new
+tool is a walkthrough whose first gate asks "can this export be
+reproduced over plain HTTP?" — if yes, use the HTTP connector above
+instead of building a browser tool. Catalog and flow changes go
+through an independent reviewer plus PR review.
+
+Playwright is an opt-in dependency
+(`uv pip install -r requirements-browser.txt` +
+`python -m playwright install chromium`).
 
 ## Wiki directory layout
 
