@@ -31,6 +31,13 @@ TLS, request spec, and assurance envelope live in
 [tool-query-guide.md](../wiki/references/tool-query-guide.md).
 Pre-flight diagnostics use `doctor` (below).
 
+**Operating modes** — dispatch on the leading `$ARGUMENTS` keyword:
+
+| Keyword | Mode |
+|---|---|
+| `register` | Registration wizard (interactive catalog entry authoring — see below) |
+| Anything else | Extraction flow (Process section) |
+
 **Resolving `wiki_root`**: read the `wiki_root:` field from `AGENTS.md`.
 If missing, point the user at `wiki-init`.
 
@@ -47,12 +54,27 @@ are the explanation layer — editing an article does not change the
 connection target, allowlist, or limits (safety perimeter).
 
 **If the tool is NOT in the catalog**, do not improvise a connection —
-route to registration: draft a catalog entry with the user (connector
-sections + "Sample catalog setup" in
-[tool-query-guide.md](../wiki/references/tool-query-guide.md)), have
-them place credentials in `{wiki_root}/.local/credentials.json` for
-remote connectors, then run `catalog-validate` and `doctor`. The
-catalog change lands through normal PR review before any extraction.
+switch to the registration wizard (`register` mode).
+
+## Registration wizard (`register` mode)
+
+Humans should not hand-write catalog JSON. The wizard inverts the
+work: the user answers short questions (AskUserQuestion, one topic at
+a time), the LLM drafts the entry, the scripts gate it.
+
+Question sequence, per-connector required fields, and defaults live in
+the "Registration wizard" section of
+[tool-query-guide.md](../wiki/references/tool-query-guide.md). Fixed
+rules regardless of connector:
+
+- **Secrets never pass through the chat.** The LLM writes a
+  placeholder `credential_ref`; the user edits
+  `{wiki_root}/.local/credentials.json` themself (mode ≤ 0600).
+- Gate order: draft entry → `catalog-validate` → user places
+  credentials → `doctor` → PR review. Extraction starts only after
+  the catalog change lands through review.
+- Keep `allowed_tables` minimal — register the tables this use case
+  needs, not the whole schema.
 
 ## Process
 

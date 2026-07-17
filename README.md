@@ -142,8 +142,13 @@ the next section, `/wiki-browser-extract`.
 
 The catalog `{wiki_root}/tools/catalog.json` (git-managed) is the
 source of truth for execution contracts: connection targets, table
-allowlists, row caps. Adding a data source means adding an entry —
-a minimal sqlite one looks like:
+allowlists, row caps.
+
+You don't have to hand-write it: run `/wiki-tool-query register` and
+the LLM interviews you (connector type, connection, table allowlist,
+limits, delivery), drafts the entry, validates it, and pre-flights it
+with `doctor` — you only place credentials and review the PR. For
+reference, a minimal sqlite entry looks like:
 
 ```json
 {

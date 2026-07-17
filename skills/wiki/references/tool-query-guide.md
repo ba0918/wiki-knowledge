@@ -2,8 +2,11 @@
 
 Detailed reference for the `wiki-tool-query` skill. The operational
 flow's main text is `skills/wiki-tool-query/SKILL.md`. The execution
-contract's source of truth is `{wiki_root}/tools/catalog.json` (schema:
-`{wiki_root}/schema/tool-catalog-schema.json`).
+contract's source of truth is `{wiki_root}/tools/catalog.json`. The
+schema-of-record document is `tool-catalog-schema.json` (kept in this
+repository's own wiki under `schema/`); enforcement itself is built
+into `tool_query_run.py`'s validator, so a wiki without the schema
+file still validates identically via `catalog-validate`.
 
 ## Funnel presentation format
 
@@ -336,6 +339,63 @@ decide". Store as a regular article under `{wiki_root}/concepts/`.
    knowledge worth externalizing.
 3. Append to the execution-log section every run. When the judgment
    changes, update the body (git carries the history).
+
+## Registration wizard (`register` mode)
+
+Interactive catalog-entry authoring: the user answers short questions
+(AskUserQuestion — one topic per question, concrete options with a
+recommended default first), the LLM drafts the JSON, the scripts gate
+it. Never ask the user to write JSON by hand, and never accept secret
+values through the chat.
+
+Question sequence:
+
+1. **Identity** — `tool_id` (kebab-case) and a one-line description
+   of what the source holds (this line seeds the future Selection
+   Recipe).
+2. **Connector type** — sqlite / postgres / mysql / http. Routing
+   hints: a browser-only admin UI with no API belongs to
+   `wiki-browser-extract`, not here; a tool with a JSON API behind it
+   (Redash / Kibana / internal API) is `http`.
+3. **Connection** (per type):
+   - `sqlite`: `connection.path` — DB file path relative to
+     `{wiki_root}`.
+   - `postgres` / `mysql`: `host` / `port` (default 5432 / 3306) /
+     `dbname` / `user`. **Gate**: `user` must be the read-only role —
+     if it does not exist yet, pause the wizard and walk through the
+     role-setup procedure in the connector section above first.
+     postgres adds `default_schema` (default `public`); optionally a
+     `canary_relation` to enable `doctor --probe-write`. Set
+     `credential_ref` (same name as `tool_id` is fine).
+   - `http`: `base_url` (https origin), `allowed_endpoints`
+     (method + path_prefix — register only the endpoints this use
+     case needs), `auth_header_name` + `auth_header_template`, and
+     `credential_ref`.
+4. **Table allowlist** (SQL types only) — which tables does this use
+   case actually read? Keep it minimal; suggest qualified names for
+   pg/mysql. Endpoints already play this role for `http`.
+5. **Limits** — offer the defaults (`max_rows` 10000,
+   `max_result_bytes` 10 MiB, `max_cell_bytes` 64 KiB, `timeout_sec`
+   60; `http` adds `max_response_bytes`, recommended 8 MiB) and ask
+   only whether to tighten them.
+6. **Delivery** — `delivery.allowed_dirs` (default
+   `outputs/deliveries`). Create the directory if it does not exist
+   yet — step 9's `delivery_writable` check fails on a missing dir.
+7. **Draft + validate** — write the entry into
+   `{wiki_root}/tools/catalog.json`, show the diff, run
+   `catalog-validate`.
+8. **Credentials** (remote types) — the user edits
+   `{wiki_root}/.local/credentials.json` themself (git-ignored, mode
+   ≤ 0600, key = `credential_ref`). Secrets never appear in the
+   conversation, argv, or any file the LLM writes.
+9. **Pre-flight** — run `doctor` for EVERY connector type (sqlite
+   included: it checks connectivity, delivery, and audit; the
+   credential check reports SKIP, which is normal). Add
+   `--probe-write` when a canary relation was declared. Show the
+   table to the user.
+10. **Land it** — the catalog change goes through normal PR review
+    before the first extraction. After the first case closes, propose
+    a Selection Recipe article.
 
 ## Sample catalog setup
 
