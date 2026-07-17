@@ -1,179 +1,69 @@
 # AGENTS.md
 
-This file is the shared project instruction source for Claude Code, Codex CLI, and other agents.
-`CLAUDE.md` must stay a thin wrapper that imports this file with `@AGENTS.md`.
+Shared project instructions for Claude Code, Codex CLI, and other agents.
+`CLAUDE.md` is a thin wrapper that imports this file with `@AGENTS.md`.
 
 ## Wiki Knowledge Base
 
-このプロジェクトは LLM Wiki Knowledge Base です。
+This project is the LLM Wiki Knowledge Base.
 
-wiki_root: .wiki
+`wiki_root: .wiki`
 
 ## Scope
 
-LLM向けの知識ベース構築の仕組みを実験するプロジェクト。Karpathy の LLM Wiki コンセプトをエージェントスキルとして実装し、既存プロジェクトに導入可能な形で提供する。
+An experiment in LLM-driven knowledge-base construction. Implements
+Karpathy's LLM Wiki concept as agent skills, packaged to drop into an
+existing project.
 
 ## Conventions
 
-- Wiki記事は `.wiki/concepts/` にフラットに配置（`{slug}.md`）
-- ソースドキュメントは `.wiki/raw/` に immutable に保存
-- 相互参照は `[[wikilink]]` 記法を使用
-- フロントマターは `.wiki/schema/page-template.json` に準拠
-- カテゴリは `.wiki/schema/categories.json` で管理
-- **Schema 体制**: v0（`page-template.json`）が schema-of-record。v1（`page-template-v1.json` + `lib/` migrations）は採用トリガー付き standby 資産 — 裁定: `.agents/artifacts/plans/20260707194819_schema-regime-decision.md`
+- Wiki articles live flat under `.wiki/concepts/` as `{slug}.md`.
+- Source documents live under `.wiki/raw/`, immutable.
+- Cross-references use `[[wikilink]]` notation.
+- Frontmatter follows `.wiki/schema/page-template.json`.
+- Categories are managed in `.wiki/schema/categories.json`.
+- **Schema regime**: v0 (`page-template.json`) is the schema-of-record.
+  v1 (`page-template-v1.json` + `lib/` migrations) is a standby asset
+  with an adoption trigger — decision doc:
+  `.agents/artifacts/plans/20260707194819_schema-regime-decision.md`.
 
 ## Articles
 
-- [[llm-wiki-knowledge-base]] — LLM Wiki Knowledge Base（concepts）
-- [[wiki-knowledge-architecture]] — Wiki ナレッジ構築アーキテクチャ（concepts）
-- [[llm-wiki-use-cases]] — LLM Wiki ユースケース（concepts）
-- [[llm-wiki-tooling]] — LLM Wiki ツーリング（tools）
-- [[querylog]] — QueryLog メタデータログ基盤（concepts）
-- [[trust-score]] — Trust Score 記事信頼度スコア（concepts）
-- [[gap-detection]] — Gap Detection 知識ギャップ検出と Ingest 提案（concepts）
-- [[graphify-knowledge-graph-concepts]] — graphify 知識グラフ構築パターンと適用判断（concepts）
-- [[wikilink-github-interop]] — GitHub と wikilink 記法の相互運用性（concepts）
-- [[wikilink-reader-comparison]] — wikilink リーダー実装比較（tools）
-- [[wikilink-conversion-strategies]] — wikilink ↔ 標準 Markdown link 変換戦略（practices）
-- [[wikilink-link-parser-spec]] — lint-wiki.py wikilink パーサ仕様（references）
-- [[inquiry-event-point-missing]] — イベント pt 未付与 調査手順ナレッジ（practices）
-- [[inquiry-subscription-mismatch]] — 月額課金不整合 調査手順ナレッジ（practices）
+- [[llm-wiki-knowledge-base]] — LLM Wiki Knowledge Base (concepts)
+- [[wiki-knowledge-architecture]] — Wiki knowledge construction architecture (concepts)
+- [[llm-wiki-use-cases]] — LLM Wiki use cases (concepts)
+- [[llm-wiki-tooling]] — LLM Wiki tooling (tools)
+- [[querylog]] — QueryLog metadata log substrate (concepts)
+- [[trust-score]] — Trust Score for article confidence (concepts)
+- [[gap-detection]] — Gap Detection and ingest suggestions (concepts)
+- [[graphify-knowledge-graph-concepts]] — graphify knowledge graph patterns and applicability (concepts)
+- [[wikilink-github-interop]] — GitHub × wikilink interoperability (concepts)
+- [[wikilink-reader-comparison]] — wikilink reader implementations (tools)
+- [[wikilink-conversion-strategies]] — wikilink ↔ standard Markdown link conversion (practices)
+- [[wikilink-link-parser-spec]] — `lint-wiki.py` wikilink parser spec (references)
+- [[inquiry-event-point-missing]] — Investigation playbook: unattributed event points (practices)
+- [[inquiry-subscription-mismatch]] — Investigation playbook: subscription mismatch (practices)
 
-## QueryLog
+## Feature reference
 
-- wiki-query 実行時にクエリメタデータを `.wiki/outputs/querylog.jsonl` に蓄積する（JSONL、append-only）
-- スキーマ: `.wiki/schema/querylog-schema.json`
-- 追記: `python3 skills/wiki/scripts/querylog_append.py --wiki-root .wiki --question <q> --consulted <paths>... --answer-file <path>` — id 生成・`sources_cited` の wikilink 抽出・schema 検証・flock 付き JSONL 追記をスクリプトが担う（LLM は JSON を手組みしない）。テストが schema の required と `REQUIRED_FIELDS` の同期を機械検証
-- 集計: `python3 skills/wiki/scripts/querylog_stats.py --wiki-root .wiki`
-- querylog.jsonl はデフォルト git 管理外（`.wiki/.gitignore`）
+Detailed reference lives under `docs/reference/`. Each doc is short and
+task-oriented — read the one that matches what you're doing.
 
-## Query Retrieval
-
-- wiki-query は retrieval pre-pass を使う: `python3 skills/wiki/scripts/query_retrieve.py --wiki-root .wiki --keywords <kw>...`
-- graph.json（outbound + backlink 両方向の1ホップ展開、seed 影響は degree 正規化で分配）と Trust Score を消費し、trust 注釈つき候補リストを返す
-- `outputs/graph.json` 必須（不在時 exit 2 で graph_gen.py を案内）。出力形式: `--format table`（デフォルト）/ `json`
-- 回答で trust < 0.30 の記事を引用する際は「（信頼度低）」を付す（wiki-query スキル）
-
-## Trust Score
-
-- 記事ごとの信頼度スコア（0.0〜1.0）を4要素（ソース数・鮮度・引用頻度・backlink数）で算出
-- **v2（絶対スケール）**: 各要素は絶対飽和カーブ（ソース n/(n+1)、引用 c/(c+2)、backlink b/(b+2)）。min-max 正規化は廃止 — 0.30 閾値が記事単体で意味を持つ
-- 鮮度は半減期365日の指数減衰（1年=0.50、2年=0.25、0にならない）— スナップショット方針（source_revision 固定）と整合
-- 実行: `python3 skills/wiki/scripts/trust_score.py --wiki-root .wiki`
-- 出力形式: `--format table`（デフォルト）/ `json` / `report`（Markdown レポート出力）
-- レポート出力先: `.wiki/outputs/reports/{YYYYMMDD}-trust-score.md`
-- QueryLog が空の場合は引用頻度を除外し、残り3要素で再配分
-- Trust Score は derived value のためフロントマターには保存しない
-
-## Gap Detection
-
-- QueryLog の `gap_topics` を集計し、既存記事とのカバレッジを照合してナレッジギャップを検出
-- 実行: `python3 skills/wiki/scripts/gap_detect.py --wiki-root .wiki`
-- 出力形式: `--format table`（デフォルト）/ `json` / `report`（Markdown レポート出力）
-- レポート出力先: `.wiki/outputs/reports/{YYYYMMDD}-gap-detect.md`
-- `--threshold` でカバレッジ閾値を調整（デフォルト: 0.8）
-
-## Lint
-
-- Wiki 記事の品質・整合性を10項目で自動チェック
-- `dead_link` / `orphan` は graph layer 経由で検出するため、**lint 実行前に `graph_gen.py` を実行する必要がある**
-- `--use-graph` はデフォルト ON。`.wiki/outputs/graph.json` 不在時は **exit 2** で停止し、`graph_gen.py` の実行を案内する
-- 単独実行を救済する opt-in フラグ: `--auto-graph`（graph 欠如時に lint 側が graph_gen を subprocess 呼び出し）
-- legacy パス: `--no-graph`（inventory から直接 dead_link/orphan を再計算）
-- 実行: `python3 skills/wiki/scripts/graph_gen.py --wiki-root .wiki && python3 skills/wiki/scripts/lint-wiki.py --wiki-root .wiki`
-- 出力形式: `--format table`（デフォルト）/ `json` / `report`（Markdown レポート出力）
-- レポート出力先: `.wiki/outputs/reports/{YYYYMMDD}-lint.md`
-- チェック項目:
-  - Dead link — `[[slug]]` の参照先が存在しない
-  - Orphan — 被リンクなしの孤立記事
-  - Missing source — `source_refs` のファイルが存在しない
-  - Missing frontmatter — 必須フィールド欠損
-  - Coverage gap — 2回以上参照されているが記事がない
-  - Link quality — 一方向リンク、`related` と本文 wikilink の不一致
-  - Article quality — 50 words 未満の短記事、推測ブロック 30% 超
-  - Format violations — slug 命名規則、page-template.json 準拠、category/type/date/tags 検証、未採用 v1 記事の混入検出（schema_version_unadopted）
-  - Wikilink rendering — `[[slug]]` に GitHub Web UI 用併記 `([↗](slug.md))` が付いていない（`python3 skills/wiki/scripts/wikilink_render.py --write .wiki/concepts/` で修正、compile に自動統合）
-  - Index sync — `.wiki/index.md` と `concepts/` の乖離（未掲載記事・存在しない記事の掲載）を検出
-
-## Repo Ingest
-
-- git リポジトリ（URL / ローカルパス）を自動 clone して knowledge source 化する入口
-- 実行: `python3 skills/wiki/scripts/repo_ingest.py <url-or-path>... --wiki-root .wiki`（複数リポジトリ一括可）
-- clone: `ghq get --shallow` 優先 / `git clone --depth 1` フォールバック（`{wiki_root}/.cache/repos/`、gitignore 対象）
-- 出力: manifest（`{wiki_root}/.cache/manifests/{slug}.json`、構造メタ + docs 候補ティア）+ 機械生成 `repo-inventory.md`（`raw/files/{slug}/`）
-- raw フロントマター拡張: `source_revision`（commit hash）/ `source_path`（`source_version` は pipeline の int 型と衝突するため不使用）
-- 複数リポジトリは「全 clone → 全 ingest → 一括 compile」の3段で処理（横断 wikilink のため）。手順: wiki-ingest スキル「repo ソースの ingest」、compile 規範: `references/compilation-guide.md`「repo ソースの compile」
-- セキュリティ: positive-match allowlist（ext::/file:// 拒否）、`GIT_ALLOW_PROTOCOL` 制限、userinfo 除去、2 base パス封じ込め
-- オプション: `--max-docs`（既定50）/ `--full-clone` / `--refresh` / `--output`。exit: 0=全成功 / 1=一部失敗 / 2=引数エラー / 130=中断
-
-## Discover（ソースコードからドメイン知識抽出）
-
-- repo ingest 済みリポジトリのソースコードから LLM がドメイン知識を自動抽出し、`concepts/` に記事を直接生成する compile のコードソース対応モード
-- 前提: repo ingest 済み（manifest が `.wiki/.cache/manifests/{slug}.json` に存在すること）
-- ソース分類スクリプト: `python3 skills/wiki/scripts/source_scan.py --wiki-root .wiki --slug {slug}`（6カテゴリ: schema / routes / rules / state / tests / entry）
-- 生成記事: `{slug}-architecture` / `{slug}-db-schema` / `{slug}-api-routes` / `{slug}-business-rules` / `{slug}-state-machines` / `{slug}-glossary`（内容に応じて取捨選択）
-- discover 記事の識別: tags に `discover` を含む + `source_refs` に `raw/files/{slug}/repo-inventory.md`
-- 読解ガイド: `skills/wiki/references/discover-guide.md`、プロンプト: `skills/wiki/references/prompts.md` の Discover 節
-- パイプライン: `wiki-ingest → wiki-compile discover → wiki-compile → graph_gen → wiki-lint`（discover はオプショナル、wiki-cycle で一括実行可能）
-
-## Security Scan（ingest）
-
-- ingest 時のセキュリティチェック 3 項目（パス traversal / 機密データ / プロンプトインジェクション）はスクリプトが単一の真実源
-- 実行: `python3 skills/wiki/scripts/security_scan.py <file>... --filename <保存名>`（テキスト直接入力は `--stdin`）
-- exit: 0=クリーン / 1=検出あり（ingest 中断） / 2=引数エラー。`--format json` あり
-
-## Tool Query（制約・監査付きアドホック集計）
-
-- catalog 登録済みデータソース（**sqlite / postgres / mysql / HTTP API**）への探索的アドホック集計を dry-run 承認フローで実行する（スキル: wiki-tool-query）。承認フロー・監査・delivery・single-use は connector 非依存で共通、type 差は接続と enforcement 層に閉じる
-- **実行契約の真実源は git 管理 catalog**: `.wiki/tools/catalog.json`（schema: `.wiki/schema/tool-catalog-schema.json`）。接続先・relation allowlist・出力上限・delivery 先を宣言し、変更は PR レビューを経る（Wiki 記事の編集では安全境界を変更できない）。`type` 別の条件付き必須（tagged config）
-- フロー: `prepare`（ファネル COUNT + immutable proposal bundle 生成）→ **人間が** `approve`（TTY 確認プロンプト、LLM は代行しない）→ `execute`（検証マトリクス → 本実行 → CSV + manifest → atomic publish）。承認は single-use（consumed = 承認の消費）、TTL 24h
-- 実行: `python3 skills/wiki/scripts/tool_query_run.py {catalog-validate|prepare|approve|execute|doctor} --wiki-root .wiki ...`（exit: 0=成功 / 1=拒否・失敗 / 2=usage / 130=SIGINT。Python 3.11+ 必須）
-- connector 別 enforcement:
-  - **sqlite**: read-only 三重防御（ro URI + query_only + authorizer）+ setlimit
-  - **postgres / mysql**: DB 側 read-only role（第一防御・要設定）+ sqlglot 静的 SQL 検査（単一 SELECT / relation allowlist / 未知関数拒否）+ session read-only（pg: transaction 前 `read_only=True` + named cursor / mysql: SET READ ONLY + SSCursor）+ TLS 既定 verify。MySQL 一時テーブル穴は role 側で、MariaDB は保証範囲外
-  - **http**: request spec（JSON、`--request-file` / `--count-request`）+ endpoint allowlist（method + segment 境界 path prefix）+ URL canonicalize（encoded separator 拒否・二重 encoding fail closed）+ リダイレクト拒否 + `Accept-Encoding: identity` + `max_response_bytes` chunk 遮断。one-shot JSON API のみ
-  - 共通: 出力上限 + 全 segment symlink 拒否のパス封じ込め + CSV 無害化（OWASP）
-- **doctor**（接続の事前診断）: `doctor --wiki-root .wiki [--tool <id>] [--probe-write <tool-id>]`。実データに触れず（COUNT すら実行しない）接続疎通・session_readonly・role_grants・TLS・delivery を診断。read-only は独立 check に分解し `role_write_denial` 等は SKIP 明示。exit 0=必須 OK / 1=NG / 2=usage。監査は plan 非依存の `doctor` イベント
-- credential は `.wiki/.local/credentials.json`（git 管理外、group/other 権限なし = 0600 以下、sqlite は省略可・remote は必須）から `credential_ref` で解決。パスは全 segment symlink 拒否 + O_NOFOLLOW の同一 fd 検証で読む。秘密値は stdout/stderr/監査/エラーに載せない（driver 例外は分類根拠の sqlstate/errno のみに sanitize）
-- 監査ログ: `.wiki/outputs/toolquery-audit.jsonl`（append-only、git 管理外、値を含まないメタデータのみ）。bundle: `.wiki/outputs/toolquery-plans/{plan_id}/`（git 管理外）
-- Selection Recipe 記事（category: practices、tags: selection-recipe）が「何をどう判断して取得するか」を蓄積する説明層。テンプレート: `skills/wiki/assets/selection-recipe-template.md`、ガイド: `skills/wiki/references/tool-query-guide.md`
-- wiki-query との接点は「Recipe 記事の検索・提示」まで（候補に出ただけで実行しない）
-- 依存: psycopg[binary]（pg）/ PyMySQL（mysql）/ sqlglot（静的 SQL 検査）。requirements.txt に major.minor 上限付きで宣言。実 DB smoke は opt-in（`TOOL_QUERY_SMOKE_PG` / `TOOL_QUERY_SMOKE_MYSQL` 環境変数、未設定時 skip）
-
-## Browser Extract（ブラウザ操作系ツールの封じ込め抽出）
-
-- Tool Query の**別系統**。SQL 系（静的検査 + DB role で機械保証）と保証水準が異なる（browser 系 = 封じ込め + 証跡の honest scoping）ため統合せず、catalog スキーマ規約と監査 JSONL 形式のみ共有する。スキル入口: `skills/wiki-browser-extract/SKILL.md`（薄いルーター。承認は人間の TTY 操作で LLM は代行しない）
-- **承認モデルは seal-at-prepare**（SQL 系の approve-then-execute ではない）: prepare = フロー実行 + 抽出 + 検証契約 enforce まで完了し成果物 + manifest を封印（SHA-256 確定、`prepared` 監査イベントに封印ハッシュを記録）→ 人間 approve（TTY、封印 artifact + manifest からハッシュを**再導出**し `prepared` 監査アンカーと fail-closed 照合、不一致は拒否）→ execute = **封印済み成果物の delivery 解放のみ**（ブラウザ再実行なし・single-use）。承認がゲートするのは delivery のみで機密性境界は「そのマシン」に後退する（honest scoping）
-- 実行契約の真実源は git 管理の **catalog**（`.wiki/tools/browser-catalog.json`、schema: `.wiki/schema/browser-extract-catalog-schema.json`）+ **固定フローコード**（`.wiki/tools/flows/{tool_id}.py`、PR レビュー必須）。フローは raw Playwright を触らず capability API にのみ書く。LLM の自由度は params meta-schema 検証付きパラメータ注入のみ（`.wiki/schema/browser-extract-params-schema.json`、各パラメータに enum/pattern/maxLength を必須化）
-- 実行: `python3 skills/wiki/scripts/browser_extract_run.py {catalog-validate|prepare|approve|execute|doctor|login} --wiki-root .wiki ...`（exit: 0=成功 / 1=拒否・失敗 / 2=usage / 130=SIGINT）
-- **フローコードの担保は3層**（honest scoping — 悪意フローへの構造的封じ込めは主張しない）: (1) catalog の SHA-256 pin（不一致 = `flow_pin_mismatch` で実行拒否、実行時 git 非照会）、(2) ロード時 AST 静的ゲート（import/exec/eval/dunder/単一 run 以外を拒否）、(3) PR レビュー
-- **封じ込めモデル**: context スコープ interception（allowlist = method + path prefix + resource type 粒度）+ WebSocket 拒否 + service worker block + redirect hop 再検証 + `data:`/`blob:` 拒否 + WebRTC 無効化 + ephemeral user-data-dir + fresh context。URL 正規化は http connector 流用
-- **検証語彙 v1（閉集合）**: filter_readback / row_count_range / selector_exists（正しさ）、export_metadata_match / ui_total_vs_file_rows / tenant_id_match / primary_key_unique（独立 anchor）、artifact_hash（完全性）、screen_fingerprint（identity）。未知語彙・証拠不足は fail-closed。**B1 は独立 anchor を最低1つ含む必要がある**（catalog-validate で強制）。tier B1（export あり）/ B2（DOM 抽出、完全性保証なし）/ B3（OCR、v1 対象外）ごとに保証マトリクスを schema に持つ
-- session state は credential 同格の封じ込め（0600 atomic / O_NOFOLLOW / 全 segment symlink 拒否 / TTL / tool·origin·account 束縛）。`.wiki/.local/browser-sessions/{tool_id}.json`（git 管理外）
-- **auth profile**: none / form / form+totp（catalog `auth.login` の宣言的フォーム設定で自動ログイン、password は `credential_ref`・TOTP secret は `totp_credential_ref`・username は非秘密 catalog field）/ human-assisted（`login` サブコマンドで headed 捕捉。抽出・delivery 経路なし）。prepare が session store を解決し無ければ form 系は headless 自動ログインで捕捉→0600 保存。TOTP は RFC 6238（`lib/service/browser_login.py` が真実源）
-- **approve は TTY 確認必須**（`sys.stdin.isatty()`。パイプ越し自動承認は exit 2 で拒否）。承認材料は封印 artifact + manifest の再導出 + `prepared` 監査アンカー照合を通したものだけを stderr 提示し `yes` 入力後に commit。LLM は代行しない
-- **doctor**: browser 非依存検査（catalog resolve / flow pin / AST / params_schema）+ `BROWSER_EXTRACT_SMOKE` 時は実 chromium で `login_reachability` / `selector_exists` を OK/NG 判定（データ非接触は主張しない honest scoping）
-- 承認基盤（single-use・TTL・prepare-publish/approve-CAS/consume-CAS の順序と lock 規律）は SQL 系と共有 core（`lib/service/tool_approval.py` の `ApprovalService`）を再利用。監査は `lib/service/tool_audit.py` を registry 注入で一般化し `outputs/browser-audit.jsonl` に分離
-- 設計裁定・登録壁打ち手順・tier 判定・reason hint 表・既知の限界: `skills/wiki/references/browser-extract-guide.md`
-- 依存: playwright（`requirements-browser.txt` で opt-in 宣言、下限 1.48 = route_web_socket。本体 requirements.txt 非汚染）。ブラウザバイナリは `python -m playwright install chromium`。実 E2E は opt-in（`BROWSER_EXTRACT_SMOKE` 環境変数、未設定時 skip）— ブラウザ非依存の決定的判定ロジック（AST ゲート・allowlist 照合・URL 正規化・session 封じ込め・janitor・検証契約 enforce・seal-at-prepare 監査アンカー照合）は常時実行テストで検証する
-- smoke / E2E 実行: `uv pip install -r requirements-browser.txt && python -m playwright install chromium` で `.venv` に導入後、`cd skills/wiki/scripts && BROWSER_EXTRACT_SMOKE=1 python -m pytest lib/service/test_browser_flow_runner.py test_browser_extract_e2e.py`。fixture は stdlib http.server ベースの `lib/service/browser_fixture_server.py`（login form / TOTP(stdlib hmac) / UI total 付きテーブル / CSV export + 誤成功系変異ルート）。bootstrap の実測注記は browser-extract-guide.md §17
-
-## Operation Log（log.md）
-
-- `## [YYYY-MM-DD] {op} | ...` の定型追記はスクリプトが担う（単複の使い分け等のフォーマットドリフト防止）
-- 実行: `python3 skills/wiki/scripts/log_append.py {ingest|compile|promote|query|lint} --wiki-root .wiki <op別フィールド>`
-- 共通オプション: `--date`（省略時は今日）/ `--note`（末尾に「 — {note}」を付す自由記述）
-
-## Graph Layer
-
-- `concepts/*.md` から派生する読み取り専用グラフ（nodes / edges / metadata.dangling_links）
-- スクリプト: `skills/wiki/scripts/graph_gen.py`
-- 出力先: `.wiki/outputs/graph.json`
-- 役割: lint の `dead_link` / `orphan` 検出基盤。検出ロジックの二重実装を排除し、層越境を防ぐ
-- 再生成: `python3 skills/wiki/scripts/graph_gen.py --wiki-root .wiki`
-- cycle 実行時は `compile → graph_gen → lint` の順で orchestrator が明示的に呼び出す
-- graph layer は派生物（derived）のため git 管理外運用も可能（必要に応じて `.wiki/.gitignore` で除外）
+| Area | Doc |
+|---|---|
+| QueryLog append + stats | [`docs/reference/querylog.md`](docs/reference/querylog.md) |
+| Query retrieval pre-pass | [`docs/reference/query-retrieval.md`](docs/reference/query-retrieval.md) |
+| Trust Score | [`docs/reference/trust-score.md`](docs/reference/trust-score.md) |
+| Gap Detection | [`docs/reference/gap-detection.md`](docs/reference/gap-detection.md) |
+| Wiki Lint (10 checks) | [`docs/reference/lint.md`](docs/reference/lint.md) |
+| Repo Ingest | [`docs/reference/repo-ingest.md`](docs/reference/repo-ingest.md) |
+| Discover (code → domain articles) | [`docs/reference/discover.md`](docs/reference/discover.md) |
+| Ingest security scan | [`docs/reference/security-scan.md`](docs/reference/security-scan.md) |
+| Tool Query (SQL / HTTP) | [`docs/reference/tool-query.md`](docs/reference/tool-query.md) |
+| Browser Extract (containment) | [`docs/reference/browser-extract.md`](docs/reference/browser-extract.md) |
+| Graph layer | [`docs/reference/graph-layer.md`](docs/reference/graph-layer.md) |
+| Operation log (`log.md`) | [`docs/reference/operation-log.md`](docs/reference/operation-log.md) |
 
 ## Research Gaps
 
-_未調査のトピックがあればここに記録_
+_Record uninvestigated topics here._
