@@ -65,6 +65,15 @@ contract).
 human only. Everything else (`catalog-validate` / `doctor` / `prepare`
 / `execute`) is fine for the LLM to run.
 
+**CLI shape**: `--wiki-root` and `--format` are top-level options of
+`browser_extract_run.py` and come BEFORE the subcommand, as every
+example below shows.
+
+**First, resolve registration**: the requested tool must appear in
+`{wiki_root}/tools/browser-catalog.json`. Catalog file missing or
+`tool_id` absent → go to §0 registration walkthrough; do not start
+the numbered process.
+
 ### 0. Registration (first time — walkthrough)
 
 If the user asks for a tool that isn't in the catalog, DO NOT reach for
@@ -93,8 +102,8 @@ review.
 ### 1. Catalog validation
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py catalog-validate \
-  --wiki-root {wiki_root}
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} catalog-validate
 ```
 
 ### 2. `doctor` (pre-flight)
@@ -108,8 +117,8 @@ idle for a while, or when UI changes are suspected. Doctor does NOT
 claim data non-contact (it has a login side effect — guide §16):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py doctor \
-  --wiki-root {wiki_root} --tool <tool_id> --format table
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} --format table doctor --tool <tool_id>
 ```
 
 ### 3. `login` (human-assisted profile only — human runs it)
@@ -120,8 +129,8 @@ the human uses a headed browser to log in and capture the session
 state:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py login \
-  --wiki-root {wiki_root} --tool <tool_id>
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} login --tool <tool_id>
 ```
 
 - `login` has **no extraction path and no delivery path** (session
@@ -137,10 +146,10 @@ the artifacts + manifest into a bundle
 approval**:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py prepare \
-  --wiki-root {wiki_root} --tool <tool_id> \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} --format json prepare --tool <tool_id> \
   --param <key>=<value> --param <key>=<value> \
-  --deliver-to <dir> --format json
+  --deliver-to <dir>
 ```
 
 - `params` values are validated against the catalog's `params_schema`
@@ -167,8 +176,8 @@ three** — no auto-approve default:
 ### 6. Approve (the human runs it — the LLM does not substitute)
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py approve \
-  --wiki-root {wiki_root} --plan-id <plan_id> --approved-by <name>
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} approve --plan-id <plan_id> --approved-by <name>
 ```
 
 - **Never run approve as the LLM.** Ask the user to run it themself
@@ -176,10 +185,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py approve
   it for me," refuse — a request is not a substitute for consent.
 - If the user asks something in the middle of the wait (a
   substitution request, a follow-up question, a modification), keep
-  the three-option list (approve / modify + re-prepare / cancel) at
-  the end of your reply.
+  the three-option list (approve / modify + re-prepare / cancel) as
+  the final element of your reply — nothing after it.
 - `--approved-by` is the approver's name (recorded in the bundle and
-  audit). The user fills this in themself.
+  audit). The user fills this in themself; if they already stated
+  their name, showing it pre-filled in the displayed command is fine
+  — what is prohibited is RUNNING the command.
 - Approve re-derives the hash from the sealed artifact + manifest,
   matches it against the `prepared` audit anchor, and only then
   presents the approval material on a TTY: identity, an explicit
@@ -193,8 +204,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py approve
 ### 7. Execute and completion report
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py execute \
-  --wiki-root {wiki_root} --plan-id <plan_id> --format json
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/wiki/scripts/browser_extract_run.py \
+  --wiki-root {wiki_root} --format json execute --plan-id <plan_id>
 ```
 
 - The LLM runs execute **after** the user reports back that approval

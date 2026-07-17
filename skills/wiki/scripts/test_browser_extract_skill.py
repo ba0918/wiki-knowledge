@@ -67,8 +67,23 @@ class TestSkillStructure:
     def test_command_examples_use_real_subcommands(self) -> None:
         text = _read_skill()
         assert "browser_extract_run.py" in text, "実行スクリプトの参照がない"
-        # `browser_extract_run.py <subcommand>` の形で現れる語がすべて実在サブコマンド
-        cited = set(re.findall(r"browser_extract_run\.py\s+([a-z-]+)", text))
+        # argparse はグローバルオプション (--wiki-root / --format) をサブコマンドより
+        # 前に要求する。各コマンド例をトークン列に落とし、先頭のオプション対を
+        # 読み飛ばした最初の裸トークンが実在サブコマンドであることを検査する
+        # 裸の `browser_extract_run.py` は本文の言及にも現れるため、
+        # コマンド例（scripts/ パス経由の起動）だけを対象にする
+        commands = re.findall(
+            r"scripts/browser_extract_run\.py((?:[^\n\\]|\\\n)*)", text
+        )
+        assert commands, "コマンド例が1つもない"
+        cited = set()
+        for body in commands:
+            tokens = body.replace("\\\n", " ").split()
+            i = 0
+            while i < len(tokens) and tokens[i].startswith("--"):
+                i += 2  # オプションとその値を読み飛ばす
+            if i < len(tokens):
+                cited.add(tokens[i])
         assert cited, "サブコマンド例が1つもない"
         unknown = cited - _REAL_SUBCOMMANDS
         assert not unknown, f"実在しないサブコマンド例: {sorted(unknown)}"
