@@ -56,9 +56,9 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$")
 MAX_VALUE_LEN = 60
 
 CHECK_LABELS = {
-    "path": "パス traversal",
-    "secret": "機密データ",
-    "injection": "プロンプトインジェクション",
+    "path": "Path traversal",
+    "secret": "Sensitive data",
+    "injection": "Prompt injection",
 }
 
 
@@ -136,15 +136,15 @@ def render_table(findings: list[Finding], path_checked: bool) -> str:
     for check in ("path", "secret", "injection"):
         label = CHECK_LABELS[check]
         if check == "path" and not path_checked:
-            lines.append(f"⏭ {label}: SKIP（--filename 未指定）")
+            lines.append(f"⏭ {label}: SKIP (--filename not given)")
         elif by_check[check] == 0:
             lines.append(f"✅ {label}: OK")
         else:
-            lines.append(f"❌ {label}: NG（{by_check[check]} 件検出）")
+            lines.append(f"❌ {label}: NG ({by_check[check]} found)")
 
     if findings:
         lines.append("")
-        lines.append("検出内容:")
+        lines.append("Findings:")
         for f in findings:
             location = f"{f.file or '-'}:{f.line}"
             lines.append(f"  - {location} [{f.pattern}] {f.value}")
