@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite
+        run: pytest skills/wiki/scripts/ -q
+        env:
+          # Real DB / browser smoke tests are opt-in and stay off in CI.
+          TOOL_QUERY_SMOKE_PG: ""
+          TOOL_QUERY_SMOKE_MYSQL: ""
+          BROWSER_EXTRACT_SMOKE: ""
+
+  lint-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate graph
+        run: python skills/wiki/scripts/graph_gen.py --wiki-root .wiki
+
+      - name: Lint wiki
+        run: python skills/wiki/scripts/lint-wiki.py --wiki-root .wiki

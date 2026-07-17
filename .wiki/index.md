@@ -10,7 +10,7 @@
 - [[querylog]] — wiki-query のメタデータを JSONL で蓄積、Gap Detection・Trust Score の基盤
 - [[trust-score]] — 記事ごとの信頼度を4要素（ソース数・鮮度・引用頻度・backlink数）で定量評価
 - [[gap-detection]] — QueryLog のギャップトピックを分析し、優先度付き Ingest 提案を自動生成
-- [[graphify-knowledge-graph-concepts]] — graphify から学ぶ知識グラフ構築の設計パターンと wiki-knowladge への適用判断
+- [[graphify-knowledge-graph-concepts]] — graphify から学ぶ知識グラフ構築の設計パターンと wiki-knowledge への適用判断
 - [[wikilink-github-interop]] — GitHub Web UI で wikilink がレンダリングされない問題と相互運用戦略
 
 ## tools

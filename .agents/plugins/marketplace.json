@@ -1,11 +1,11 @@
 {
-  "name": "wiki-knowladge",
+  "name": "wiki-knowledge",
   "interface": {
     "displayName": "Wiki Knowledge Base"
   },
   "plugins": [
     {
-      "name": "wiki-knowladge",
+      "name": "wiki-knowledge",
       "source": {
         "source": "local",
         "path": "."

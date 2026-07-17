@@ -63,7 +63,7 @@ pandoc --from=markdown+wikilinks_title_after_pipe input.md -o output.html
 
 ## 推奨パターン（本プロジェクト）
 
-`wiki-knowladge` プロジェクトの現状方針：
+`wiki-knowledge` プロジェクトの現状方針：
 
 1. ファイルには `[[slug]]` のみ書き、書き換えはしない（戦略 3 = 併記方式の軽量版）。
 2. `## 関連` セクションで `[[slug]] — 説明` の形式で相互参照を明示する。
