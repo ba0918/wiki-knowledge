@@ -3,10 +3,13 @@
 #
 # インストール:
 #   uv pip install -r requirements-browser.txt
-#   python -m playwright install chromium   # ブラウザバイナリの取得（初回のみ）
+#   python -m playwright install chromium   # ブラウザバイナリの取得（依存更新時も再実行）
 #
 # 実 E2E は BROWSER_EXTRACT_SMOKE 環境変数ゲート下でのみ実行（未設定時 skip）。
 
 # route_web_socket（全 WebSocket 拒否）が 1.48 で追加されたため下限を固定。
 # 互換範囲方針は本体 requirements.txt と同じ: 動作確認した major.minor で上限を固定する。
+# Security stop: current bundled Chromium is below 155.0.8059.39 and is blocked.
+# No patched Python release verified as of 2026-10-08; do not use Node release numbers.
+# See docs/reference/browser-extract.md before enabling browser operations.
 playwright>=1.48,<1.55
