@@ -563,3 +563,97 @@ class TestDownloadSmoke:
             body = final.read_text()
             assert body.splitlines()[0] == "user_id,email"
             assert len([l for l in body.splitlines() if l]) == 4  # header + 3 行
+
+
+class TestBrowserVersionGate:
+    @pytest.mark.parametrize("version", ["155.0.8059.39", "155.0.8059.40", "156.0.8078.4"])
+    def test_fixed_versions(self, version):
+        from lib.service.browser_flow_runner import require_safe_browser_version
+        require_safe_browser_version(version)
+
+    @pytest.mark.parametrize("version", [None, "", "unknown", "155", "155.0.8059.39-dev", "155.0.8059.38", "153.0.8010.12", "139.0.7258.5"])
+    def test_old_or_unverified_versions(self, version):
+        from lib.service.browser_flow_runner import BrowserVersionError, require_safe_browser_version
+        with pytest.raises(BrowserVersionError) as error:
+            require_safe_browser_version(version)
+        assert sanitize_exception(error.value) == BrowserReason.BROWSER_VERSION_UNSAFE
+
+    @pytest.mark.parametrize("headless", [True, False])
+    @pytest.mark.parametrize("version", ["153.0.8010.12", None])
+    def test_rejected_context_is_closed_before_session_or_callback(self, monkeypatch, headless, version):
+        monkeypatch.setattr("lib.service.browser_flow_runner.require_safe_bundled_browser", lambda **kwargs: None)
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from lib.service.browser_flow_runner import BrowserVersionError, contained_context
+        context = Mock()
+        context.browser = SimpleNamespace(version=version)
+        pw = Mock()
+        pw.chromium.launch_persistent_context.return_value = context
+        on_setup = Mock()
+        with pytest.raises(BrowserVersionError):
+            with contained_context(pw, rules=(), storage_state={"cookies": [{"name": "secret"}]}, on_setup=on_setup, headless=headless):
+                pytest.fail("Unsafe browser must not be yielded")
+        context.close.assert_called_once()
+        context.add_cookies.assert_not_called()
+        context.add_init_script.assert_not_called()
+        context.new_page.assert_not_called()
+        on_setup.assert_not_called()
+        kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
+        assert kwargs["headless"] is headless
+        assert not Path(kwargs["user_data_dir"]).exists()
+
+    def test_fixed_context_preserves_containment_and_teardown(self, monkeypatch):
+        monkeypatch.setattr("lib.service.browser_flow_runner.require_safe_bundled_browser", lambda **kwargs: None)
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from lib.service.browser_flow_runner import contained_context
+        context = Mock()
+        context.browser = SimpleNamespace(version="155.0.8059.39")
+        pw = Mock()
+        pw.chromium.launch_persistent_context.return_value = context
+        with contained_context(pw, rules=()) as active:
+            assert active is context
+            context.route.assert_called_once()
+            context.route_web_socket.assert_called_once()
+        context.close.assert_called_once()
+        assert not Path(pw.chromium.launch_persistent_context.call_args.kwargs["user_data_dir"]).exists()
+
+
+    @pytest.mark.parametrize("headless", [True, False])
+    @pytest.mark.parametrize("version", ["153.0.8010.12", None])
+    def test_unsafe_bundle_never_launches(self, tmp_path, monkeypatch, headless, version):
+        import json
+        from unittest.mock import Mock
+        from lib.service.browser_flow_runner import BrowserVersionError, contained_context
+        manifest = tmp_path / "driver" / "package" / "browsers.json"
+        manifest.parent.mkdir(parents=True)
+        name = "chromium-headless-shell" if headless else "chromium"
+        manifest.write_text(json.dumps({"browsers": [{"name": name, "browserVersion": version}]}))
+        monkeypatch.setattr("importlib.resources.files", lambda package: tmp_path)
+        pw = Mock()
+        with pytest.raises(BrowserVersionError):
+            with contained_context(pw, rules=(), headless=headless):
+                pytest.fail("Unsafe bundled browser must not launch")
+        pw.chromium.launch_persistent_context.assert_not_called()
+
+    @pytest.mark.parametrize("contents", [None, "not JSON", '{"browsers": []}'])
+    def test_unverified_manifest_fails_closed(self, tmp_path, monkeypatch, contents):
+        from lib.service.browser_flow_runner import BrowserVersionError, require_safe_bundled_browser
+        manifest = tmp_path / "driver" / "package" / "browsers.json"
+        manifest.parent.mkdir(parents=True)
+        if contents is not None:
+            manifest.write_text(contents)
+        monkeypatch.setattr("importlib.resources.files", lambda package: tmp_path)
+        with pytest.raises(BrowserVersionError):
+            require_safe_bundled_browser(headless=True)
+
+    @pytest.mark.parametrize("headless", [True, False])
+    def test_verified_bundle_manifest_passes(self, tmp_path, monkeypatch, headless):
+        import json
+        from lib.service.browser_flow_runner import require_safe_bundled_browser
+        manifest = tmp_path / "driver" / "package" / "browsers.json"
+        manifest.parent.mkdir(parents=True)
+        name = "chromium-headless-shell" if headless else "chromium"
+        manifest.write_text(json.dumps({"browsers": [{"name": name, "browserVersion": "155.0.8059.39"}]}))
+        monkeypatch.setattr("importlib.resources.files", lambda package: tmp_path)
+        require_safe_bundled_browser(headless=headless)

@@ -22,7 +22,9 @@ import ast
 import contextlib
 import hashlib
 import ipaddress
+import json
 import os
+import re
 import shutil
 import tempfile
 import unicodedata
@@ -54,6 +56,7 @@ class BrowserReason(str, Enum):
     BUNDLE_CAP_EXCEEDED = "bundle_cap_exceeded"
     FLOW_PIN_MISMATCH = "flow_pin_mismatch"
     FLOW_AST_VIOLATION = "flow_ast_violation"
+    BROWSER_VERSION_UNSAFE = "browser_version_unsafe"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -430,6 +433,43 @@ class FlowSelectorError(Exception):
     """
 
 
+class BrowserVersionError(Exception):
+    """The launched Chromium runtime is older than the security floor or unknown."""
+
+
+MINIMUM_CHROMIUM_VERSION = (155, 0, 8059, 39)
+
+
+def require_safe_browser_version(version: object) -> None:
+    """Fail closed before session restoration or navigation (CVE-2026-102322)."""
+
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise BrowserVersionError("Chromium version could not be verified")
+    if tuple(int(part) for part in version.split(".")) < MINIMUM_CHROMIUM_VERSION:
+        raise BrowserVersionError("Chromium 155.0.8059.39 or newer is required")
+
+
+def require_safe_bundled_browser(*, headless: bool) -> None:
+    """Reject unsafe or unverified bundled builds before starting Chromium.
+
+    Check the installed Python driver's own manifest, not a Node package or
+    system Chrome. The running browser is checked again before session use.
+    """
+    from importlib.resources import files
+
+    try:
+        manifest = json.loads(
+            files("playwright").joinpath("driver", "package", "browsers.json").read_text(encoding="utf-8")
+        )
+        name = "chromium-headless-shell" if headless else "chromium"
+        entry = next(item for item in manifest["browsers"] if item["name"] == name)
+        require_safe_browser_version(entry.get("browserVersion"))
+    except BrowserVersionError:
+        raise
+    except Exception:
+        raise BrowserVersionError("Bundled Chromium version could not be verified") from None
+
+
 def sanitize_exception(exc: BaseException) -> BrowserReason:
     """runner 境界を越える全例外を閉じた reason enum に写像する。
 
@@ -437,6 +477,8 @@ def sanitize_exception(exc: BaseException) -> BrowserReason:
     stdout・CLI 出力に**一切**通さない — ここで型・名前だけを見て分類する。
     """
 
+    if isinstance(exc, BrowserVersionError):
+        return BrowserReason.BROWSER_VERSION_UNSAFE
     if isinstance(exc, FlowSelectorError):
         return BrowserReason.SELECTOR_NOT_FOUND
     name = type(exc).__name__.lower()
@@ -569,12 +611,15 @@ def contained_context(
     ``on_setup(context, user_data_dir)`` は teardown 観測用の hook。
     """
 
+    require_safe_bundled_browser(headless=headless)
     user_data_dir = Path(tempfile.mkdtemp(prefix="be-udd-"))
     context = None
     try:
         context = pw.chromium.launch_persistent_context(
             **build_launch_kwargs(user_data_dir, headless=headless)
         )
+        browser = context.browser
+        require_safe_browser_version(browser.version if browser is not None else None)
         context.set_default_timeout(default_timeout_ms)
         install_interception(context, rules, on_block=on_block)
         apply_storage_state(context, storage_state)

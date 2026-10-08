@@ -9,6 +9,38 @@ convention and the audit JSONL format.
 Skill entry point: `skills/wiki-browser-extract/SKILL.md` (thin router).
 Approval is a human TTY operation. The LLM does not substitute.
 
+## Browser security stop (CVE-2026-102322)
+
+Browser operations fail closed unless Chromium is verifiably at least
+`155.0.8059.39`, the fixed-version threshold documented in the
+[CVE advisory](https://nvd.nist.gov/vuln/detail/CVE-2026-102322).
+Both headed and headless paths check the installed Python
+Playwright driver's bundled-browser manifest **before launching Chromium**.
+Missing, unreadable, malformed, unknown, or older versions are rejected.
+After launch, the actual browser version is checked again before restoring
+session state or allowing caller navigation. Failure is reported as
+`browser_version_unsafe`; temporary contexts/profiles are cleaned up.
+This applies to login, browser-enabled doctor checks, and extraction.
+It is a minimum-version stop, not a claim that every older build is affected
+by this particular CVE or that newer builds are free of other vulnerabilities.
+
+As checked on 2026-10-08, the existing dependency range resolves to Python
+Playwright 1.54.0 (Chromium 139.0.7258.5). The latest published Python release,
+1.63.0, bundles Chromium 153.0.8010.12. Neither meets the floor, so browser
+operations currently stop. Python Playwright 1.64.0 is not published; the
+Node package's version does not establish Python package availability.
+
+Do not work around the stop with cached browser replacement, manifest edits,
+or disabled checks. Browser functionality can resume after a supported Python
+Playwright release with a verified patched bundle is available, its dependency
+range is updated explicitly, browser binaries are reinstalled, and containment
+smoke tests pass. This change intentionally adds no custom executable override.
+Browser-independent operations remain available; browser smoke tests stay opt-in.
+
+Sources: [Python releases](https://github.com/microsoft/playwright-python/releases),
+[PyPI](https://pypi.org/project/playwright/), and
+[Playwright browser installation](https://playwright.dev/python/docs/browsers).
+
 ## Approval model: seal-at-prepare
 
 Not the SQL approve-then-execute model.

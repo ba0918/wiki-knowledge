@@ -271,6 +271,10 @@ through an independent reviewer plus PR review.
 Playwright is an opt-in dependency
 (`uv pip install -r requirements-browser.txt` +
 `python -m playwright install chromium`).
+Browser operations currently fail closed because the available Python Playwright
+bundles are below the required Chromium security floor. See the
+[browser security stop](docs/reference/browser-extract.md#browser-security-stop-cve-2026-102322)
+before using login, browser doctor checks, or extraction.
 
 ## Wiki directory layout
 
